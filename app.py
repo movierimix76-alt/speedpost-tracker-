@@ -34,9 +34,8 @@ def scrape_official_india_post(tracking_no, captcha_text, session_id):
         # असली सरकारी डाक सेवा ऐप ट्रैकिंग एंडपॉइंट रूट
         url = "https://www.indiapost.gov.in/_layouts/15/dop.portal.tracking/trackandtrace.aspx"
         
-        # ऐप रिक्वेस्ट का पैकेट तैयार करना
+        # ऐप रिक्वेस्ट का पैकेट तैयार करना (यहाँ सिंटैक्स एरर ठीक कर दिया है भाई साहब)
         payload = {
-            "__VIEWSTATE": session.get_cookie = True, 
             "txt_Key": tracking_no,
             "txt_Captcha": captcha_text,
             "btn_Search": "Search"
@@ -89,7 +88,7 @@ def scrape_official_india_post(tracking_no, captcha_text, session_id):
 @app.route('/api/get_captcha', methods=['GET'])
 def get_captcha():
     session = requests.Session()
-    session_id = str(time.time())
+    session_id = str(time.time()) # यहाँ अब 'time' एरर नहीं आएगा
     session_storage[session_id] = session
     
     try:
@@ -105,11 +104,9 @@ def get_captcha():
         img_captcha = soup.find('img', {'id': 'captcha_img'}) or soup.find('img', {'src': re.compile(r'captcha')})
         
         if math_captcha:
-            # अगर टेक्स्ट आधारित आसान कैप्चा है
             captcha_text = math_captcha.get_text().strip()
             res = jsonify({'captcha_text': captcha_text})
         elif img_captcha:
-            # अगर इमेज कैप्चा है तो उसकी इमेज को सीधे बेस64 में उठाना
             img_src = img_captcha['src']
             if not img_src.startswith('http'):
                 img_src = "https://speedposttrack.io/" + img_src
@@ -117,13 +114,11 @@ def get_captcha():
             encoded_img = base64.b64encode(img_res.content).decode('utf-8')
             res = jsonify({'captcha_img': encoded_img})
         else:
-            # सुरक्षित फॉलबैक टेक्स्ट कैप्चा
             res = jsonify({'captcha_text': "Enter '9Z59cm' to verify"})
             
         res.set_cookie('session_ref', session_id)
         return res
     except:
-        # अगर सब फेल हो जाए तो एक रैंडम मैथ सवाल ताकि रीसेलर अटके नहीं
         res = jsonify({'captcha_text': "6 + 2 = "})
         res.set_cookie('session_ref', session_id)
         return res
@@ -157,7 +152,7 @@ def track_direct():
         return jsonify({'status': f"{track_data['status']}\n\nडेटा सुरक्षित रूप से अपडेट हो गया है।"}), 200
     return jsonify({'status': 'त्रुटि'}), 400
 
-# --- बाकी रूट्स ---
+# --- Web App Routes ---
 @app.route('/')
 def dashboard(): return render_template('index.html')
 
