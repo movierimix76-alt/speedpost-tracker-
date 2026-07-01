@@ -11,9 +11,10 @@ import telebot
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# ⚙️ फाइनल कॉन्फ़िगरेशन
+# ⚙️ फाइनल कॉन्फ़िगरेशन (आपका टोकन, मोंगो लिंक और OCR की सब कुछ सेट कर दिया है)
 BOT_TOKEN = "8266046259:AAHbq_TB6JOqAM-BYdZHXBfGIaZLrQbPYBw"
 MONGO_URI = "mongodb+srv://serdiyasixacshowroom99_db_user:yIIZMCDjV3qGyfnB@cluster0.zxnddtj.mongodb.net/?appName=Cluster0"
+OCR_API_KEY = "K81758351788957"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -23,12 +24,12 @@ client = MongoClient(MONGO_URI)
 db = client['tracking_business_db']
 shipments_col = db['shipments']
 
-# भारी लोड और 50 रीसेलर्स को संभालने के लिए क्यू (Queue) सिस्टम
+# भारी लोड और रीसेलर्स को संभालने के लिए क्यू (Queue) सिस्टम
 photo_queue = queue.Queue()
 
 print("⚡ लाइटवेट क्लाउड OCR सिस्टम एक्टिवेटेड!")
 
-# बिना कैप्चा ट्रैकिंग लॉजिक
+# बिना कैप्चा ट्रैकिंग लॉजिक (इंडिया पोस्ट स्टेटस चेक)
 def fetch_india_post_status(tracking_no):
     try:
         url = f"https://speedposttrack.io/track/{tracking_no}"
@@ -49,7 +50,7 @@ def ocr_space_scan(img_path):
     try:
         payload = {
             'isOverlayRequired': False,
-            'apikey': 'dontsharethiskey', # फ्री इंजन की-वर्ड
+            'apikey': OCR_API_KEY,
             'language': 'eng',
         }
         with open(img_path, 'rb') as f:
@@ -78,13 +79,13 @@ def photo_processor_worker():
                 
             full_text = "\n".join(result)
             
-            # रेगुलर एक्सप्रेशन पैटर्न्स
+            # रेगुलर एक्सप्रेशन पैटर्न्स (AWB, मोबाइल नंबर और COD अमाउंट ढूंढने के लिए)
             tracking_match = re.search(r'[A-Z]{2}\d{9}[A-Z]{2}', full_text.upper())
             phone_numbers = re.findall(r'\b\d{10}\b', full_text)
             cod_match = re.search(r'(?:COD|cod|CASH|cash|₹)\s*[:\-\s]*(\d+)', full_text)
             
             if not tracking_match:
-                bot.edit_message_text("❌ फोटो से ट्रैकिंग नंबर साफ नहीं पढ़ा जा सका। कृपया दोबारा साफ़ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
+                bot.edit_message_text("❌ फोटो से ट्रैकिंग नंबर (AWB) साफ नहीं पढ़ा जा सका। कृपया दोबारा साफ़ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
                 continue
 
             tracking_no = tracking_match.group(0)
@@ -102,6 +103,7 @@ def photo_processor_worker():
 
             status = fetch_india_post_status(tracking_no)
             
+            # मोंगो डेटाबेस में सुरक्षित सेव करना
             shipments_col.insert_one({
                 'telegram_user_id': message.from_user.id,
                 'tracking_no': tracking_no,
@@ -112,7 +114,7 @@ def photo_processor_worker():
                 'status': status
             })
             
-            response_text = f"✅ **शिपमेंट ऑटो-ऐड हो गया!**\n\n🆔 नंबर: `{tracking_no}`\n👤 नाम: {customer_name}\n📱 Mob 1: {mobile1}\n"
+            response_text = f"✅ **शिपमेंट ऑटो-ऐड हो गया!**\n\n🆔 AWB नंबर: `{tracking_no}`\n👤 नाम: {customer_name}\n📱 Mob 1: {mobile1}\n"
             if mobile2: response_text += f"📱 Mob 2: {mobile2}\n"
             if cod_amount != "0": response_text += f"💵 COD Amount: ₹{cod_amount}\n"
             response_text += f"⚡ स्टेटस: {status}"
@@ -164,6 +166,7 @@ def delete_shipment():
         return jsonify({'success': True}), 200
     return jsonify({'success': False}), 400
 
+# ऑटोमैटिक स्टेटस सिंक (हर 1 घंटे में बैकग्राउंड में चलेगा)
 def auto_track_sync():
     while True:
         time.sleep(3600)
