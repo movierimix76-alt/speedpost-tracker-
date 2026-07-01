@@ -3,8 +3,5 @@ requests
 beautifulsoup4
 flask
 gunicorn
-numpy
-opencv-python-headless
-easyocr
 pymongo
 dnspython
