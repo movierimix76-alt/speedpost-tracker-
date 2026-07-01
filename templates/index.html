@@ -6,7 +6,7 @@
     <title>SpeedPost Tracking Dashboard</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f7f9fa; margin: 0; padding: 10px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f7f9fa; margin: 0; padding: 10px; box-sizing: border-box; }
         .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
         .action-btn { flex: 1; border: none; padding: 12px; border-radius: 10px; font-weight: bold; font-size: 13px; cursor: pointer; color: white; }
         .add-btn { background: #007aff; }
@@ -27,16 +27,18 @@
         .journey-step.latest::before { background: #ff6b35; }
         .journey-date { color: #888; font-size: 11px; }
         .actions { display: flex; gap: 8px; justify-content: flex-end; width: 100%; border-top: 1px solid #f1f1f1; padding-top: 8px; }
-        .wa-btn { background-color: #25D366; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; text-decoration: none; }
+        .wa-btn { background-color: #25D366; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; text-decoration: none; display: inline-flex; align-items: center; }
         .refresh-btn { background: #e0e0e0; color: #333; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: bold; }
         .del-btn { background: none; color: #ff3b30; border: none; font-size: 12px; cursor: pointer; font-weight: bold; }
         
-        /* 🛡️ कैप्चा बॉक्स का डिज़ाइन */
-        .captcha-popup { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-20%, -50%); background: white; padding: 20px; border-radius: 15px; box-shadow: 0 5px 25px rgba(0,0,0,0.2); z-index: 1000; width: 280px; text-align: center; }
-        .captcha-popup img { max-width: 150px; margin-bottom: 10px; border: 1px solid #ddd; }
-        .captcha-popup input { width: 90%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 8px; text-align: center; font-size: 16px; font-weight: bold; }
-        .captcha-popup button { background: #ff6b35; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }
-        .overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); z-index: 999; }
+        /* 🎯 स्क्रीन के बिल्कुल बीच (Center) में पॉप-अप लाने का एकदम सही कोड */
+        .overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; }
+        .captcha-popup { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); z-index: 1000; width: 85%; max-width: 320px; text-align: center; box-sizing: border-box; }
+        .captcha-popup h3 { margin-top: 0; color: #333; font-size: 18px; }
+        .captcha-img-box { background: #f0f0f0; min-height: 50px; display: flex; align-items: center; justify-content: center; border-radius: 8px; margin: 12px 0; border: 1px dashed #bbb; font-weight: bold; color: #555; }
+        .captcha-popup img { max-width: 100%; height: auto; border-radius: 5px; display: block; }
+        .captcha-popup input { width: 100%; padding: 12px; margin-bottom: 15px; border: 2px solid #ff6b35; border-radius: 8px; text-align: center; font-size: 18px; font-weight: bold; box-sizing: border-box; }
+        .captcha-popup button { background: #ff6b35; color: white; border: none; width: 100%; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer; box-shadow: 0 3px 6px rgba(255,107,53,0.3); }
     </style>
 </head>
 <body>
@@ -56,12 +58,12 @@
         <p style="text-align: center; color: #888;">लोड हो रहा है...</p>
     </div>
 
-    <div class="overlay" id="overlay"></div>
+    <div class="overlay" id="overlay" onclick="closePopup()"></div>
     <div class="captcha-popup" id="captcha-box">
-        <h3>🛡️ सुरक्षा सत्यापन</h3>
-        <p style="font-size: 12px; color: #666;">नीचे इमेज में दिख रहा कैप्चा कोड भरें:</p>
-        <div id="captcha-img-container"></div>
-        <input type="text" id="captcha-input" placeholder="यहाँ कोड लिखें" autocomplete="off">
+        <h3>🛡️ डाक सेवा सत्यापन</h3>
+        <p style="font-size: 12px; color: #666; margin: 0;">नीचे दिख रहा कैप्चा कोड (अंक या अक्षर) भरें:</p>
+        <div class="captcha-img-box" id="captcha-img-container">⏳ लोड हो रहा है...</div>
+        <input type="text" id="captcha-input" placeholder="यहाँ कोड टाइप करें" autocomplete="off">
         <button id="captcha-submit-btn">सत्यापित करें ✅</button>
     </div>
 
@@ -111,7 +113,7 @@
 
                 container.innerHTML += `
                     <div class="card ${borderClass}" data-status="${isDelivered ? 'delivered' : 'shipping'}">
-                        <div style="padding: 15px 15px 0 15px;">
+                        <div style="padding: 10px 15px 0 15px;">
                             <div class="info">
                                 <h3>${item.name || 'Unknown'}</h3>
                                 <p><b>#${item.tracking_no}</b></p>
@@ -130,21 +132,29 @@
             });
         }
 
-        // 🔄 लाइव कैप्चा बॉक्स खोलना
         async function openCaptcha(id, directTrackingNo) {
             currentActiveId = id;
             currentDirectTrackingNo = directTrackingNo;
             document.getElementById('captcha-input').value = '';
             
-            // सर्वर से लाइव नया कैप्चा इमेज मंगवाना
-            document.getElementById('captcha-img-container').innerHTML = '⏳ कैप्चा लोड हो रहा है...';
+            document.getElementById('captcha-img-container').innerText = '⏳ डाक सेवा से लोड हो रहा है...';
             document.getElementById('overlay').style.display = 'block';
             document.getElementById('captcha-box').style.display = 'block';
             
-            let res = await fetch('/api/get_captcha');
-            let data = await res.json();
-            
-            document.getElementById('captcha-img-container').innerHTML = `<img src="data:image/png;base64,${data.captcha_img}" id="captcha-image">`;
+            try {
+                let res = await fetch('/api/get_captcha');
+                let data = await res.json();
+                if(data.captcha_text) {
+                    // अगर डाक सेवा ऐप का नया टेक्स्ट मोड काम करता है (जैसे: 5 + 2 = ?)
+                    document.getElementById('captcha-img-container').innerHTML = `<span style="font-size:22px; color:#ff6b35;">${data.captcha_text}</span>`;
+                } else if(data.captcha_img) {
+                    document.getElementById('captcha-img-container').innerHTML = `<img src="data:image/png;base64,${data.captcha_img}">`;
+                } else {
+                    document.getElementById('captcha-img-container').innerText = '❌ दोबारा दबाएं';
+                }
+            } catch(e) {
+                document.getElementById('captcha-img-container').innerText = '❌ कनेक्शन एरर';
+            }
         }
 
         function askCaptchaDirect() {
@@ -153,27 +163,28 @@
             openCaptcha(null, tracking_no.toUpperCase());
         }
 
-        // submit बटन दबाने पर वेरिफिकेशन भेजना
-        document.getElementById('captcha-submit-btn').onclick = async function() {
-            let captchaCode = document.getElementById('captcha-input').value;
-            if(!captchaCode) { alert("कृपया कैप्चा कोड टाइप करें!"); return; }
-            
+        function closePopup() {
             document.getElementById('captcha-box').style.display = 'none';
             document.getElementById('overlay').style.display = 'none';
+        }
+
+        document.getElementById('captcha-submit-btn').onclick = async function() {
+            let captchaCode = document.getElementById('captcha-input').value;
+            if(!captchaCode) { alert("कृपया कोड टाइप करें!"); return; }
+            
+            closePopup();
             
             if(currentActiveId) {
-                // डैशबोर्ड वाले पार्सल को रिफ्रेश करना
-                let res = await fetch('/api/refresh_shipment', {
+                await fetch('/api/refresh_shipment', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ id: currentActiveId, captcha: captchaCode })
                 });
                 loadShipments();
             } else if(currentDirectTrackingNo) {
-                // अलग से सिर्फ ट्रैक करना
                 let res = await fetch(`/api/track_direct?tracking_no=${currentDirectTrackingNo}&captcha=${captchaCode}`);
                 let data = await res.json();
-                alert(`📦 कूरियर: ${currentDirectTrackingNo}\n⚡ लाइव स्थिति:\n${data.status}`);
+                alert(`📦 लाइव स्थिति:\n${data.status}`);
                 loadShipments();
             }
         };
