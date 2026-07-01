@@ -14,17 +14,24 @@
         .tabs { display: flex; justify-content: space-around; background: white; padding: 12px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; position: sticky; top: 0; z-index: 100; }
         .tab { font-weight: bold; color: #888; cursor: pointer; padding: 5px 15px; border-radius: 20px; transition: 0.2s; }
         .tab.active { color: white; background: #ff6b35; }
-        .card { background: white; border-radius: 12px; padding: 15px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); display: flex; justify-content: space-between; align-items: center; border-left: 5px solid #ff6b35; }
+        .card { background: white; border-radius: 12px; padding: 15px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); display: flex; flex-direction: column; gap: 10px; border-left: 5px solid #ff6b35; }
         .card.delivered-border { border-left-color: #34c759; }
+        .card-header-area { display: flex; justify-content: space-between; align-items: flex-start; width: 100%; }
         .info h3 { margin: 0 0 5px 0; font-size: 16px; color: #222; text-transform: capitalize; }
         .info p { margin: 3px 0; font-size: 13px; color: #555; }
         .status { font-weight: bold; font-size: 13px; padding: 3px 8px; border-radius: 5px; display: inline-block; margin-top: 5px; }
         .status-transit { background: #e3f2fd; color: #007aff; }
         .status-delivered { background: #e8f5e9; color: #34c759; }
-        .actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
-        .wa-btn { background-color: #25D366; color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: bold; text-decoration: none; text-align: center; display: inline-flex; align-items: center; gap: 5px; }
-        .refresh-btn { background: #e0e0e0; color: #333; border: none; padding: 5px 10px; border-radius: 5px; font-size: 11px; cursor: pointer; font-weight: bold; }
-        .del-btn { background: none; color: #ff3b30; border: none; font-size: 12px; cursor: pointer; padding: 5px; font-weight: bold; }
+        .timeline { background: #f8f9fa; border-radius: 8px; padding: 10px; font-size: 12px; color: #444; border-top: 1px solid #eee; margin-top: 5px; }
+        .timeline-title { font-weight: bold; color: #333; margin-bottom: 5px; }
+        .journey-step { border-left: 2px solid #ddd; padding-left: 10px; margin-left: 5px; padding-bottom: 8px; position: relative; }
+        .journey-step::before { content: ''; position: absolute; left: -5px; top: 3px; width: 8px; height: 8px; background: #bbb; border-radius: 50%; }
+        .journey-step.latest::before { background: #ff6b35; }
+        .journey-date { color: #888; font-size: 11px; }
+        .actions { display: flex; gap: 8px; justify-content: flex-end; width: 100%; border-top: 1px solid #f1f1f1; padding-top: 8px; }
+        .wa-btn { background-color: #25D366; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; text-decoration: none; }
+        .refresh-btn { background: #e0e0e0; color: #333; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: bold; }
+        .del-btn { background: none; color: #ff3b30; border: none; font-size: 12px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -61,27 +68,46 @@
         function renderCards(shipments) {
             let container = document.getElementById('shipments-container');
             container.innerHTML = '';
-            if(shipments.length === 0) {
+            if(!shipments || shipments.length === 0) {
                 container.innerHTML = '<p style="text-align:center; color:#bbbbbb; margin-top:50px;">कोई शिपमेंट नहीं मिला।</p>';
                 return;
             }
             shipments.reverse().forEach(item => {
-                let isDelivered = item.status.includes('Delivered');
+                let currentStatus = item.status || "In Transit 🚚";
+                let isDelivered = currentStatus.includes('Delivered');
                 let statusClass = isDelivered ? 'status-delivered' : 'status-transit';
                 let borderClass = isDelivered ? 'delivered-border' : '';
                 
                 let imgText = item.image_url ? `\n\n🖼️ पार्सल फोटो देखें: ${item.image_url}` : '';
-                let waMsg1 = `नमस्ते ${item.name}! आपका पार्सल (${item.tracking_no}) का लाइव स्टेटस है: *${item.status}*।${imgText}`;
+                let waMsg1 = `नमस्ते ${item.name || 'Customer'}! आपका पार्सल (${item.tracking_no}) का लाइव स्टेटस है: *${currentStatus}*।${imgText}`;
                 let wa1 = `https://wa.me/91${item.mobile1}?text=${encodeURIComponent(waMsg1)}`;
+
+                let historyHtml = '<div class="timeline"><div class="timeline-title">📍 पार्सल जर्नी ट्रैक हिस्ट्री:</div>';
+                if (item.history && item.history.length > 0) {
+                    item.history.forEach((step, idx) => {
+                        let isLatest = idx === 0 ? 'latest' : '';
+                        historyHtml += `
+                            <div class="journey-step ${isLatest}">
+                                <div><b>${step.location || 'India Post'}</b>: ${step.details || 'Processing'}</div>
+                                <div class="journey-date">${step.date || ''}</div>
+                            </div>`;
+                    });
+                } else {
+                    historyHtml += '<div class="journey-step latest"><div>डेटा अपडेट हो रहा है, कृपया रिफ्रेश बटन दबाएं।</div></div>';
+                }
+                historyHtml += '</div>';
 
                 container.innerHTML += `
                     <div class="card ${borderClass}" data-status="${isDelivered ? 'delivered' : 'shipping'}">
-                        <div class="info">
-                            <h3>${item.name}</h3>
-                            <p><b>#${item.tracking_no}</b></p>
-                            <span class="status ${statusClass}" id="status-${item._id}">${item.status}</span>
-                            <p style="font-size:11px; margin-top:8px;">📱 ${item.mobile1}</p>
+                        <div class="card-header-area">
+                            <div class="info">
+                                <h3>${item.name || 'Unknown'}</h3>
+                                <p><b>#${item.tracking_no}</b></p>
+                                <span class="status ${statusClass}" id="status-${item._id}">${currentStatus}</span>
+                                <p style="font-size:11px; margin-top:8px;">📱 ${item.mobile1 || ''}</p>
+                            </div>
                         </div>
+                        ${historyHtml}
                         <div class="actions">
                             <a href="${wa1}" target="_blank" class="wa-btn">🟢 WhatsApp</a>
                             <button class="refresh-btn" onclick="refreshItem('${item._id}')">🔄 रिफ्रेश स्टेटस</button>
@@ -92,7 +118,6 @@
             });
         }
 
-        // 🔄 तुरंत लाइव स्टेटस दोबारा जांचने का फंक्शन
         async function refreshItem(id) {
             let statusSpan = document.getElementById(`status-${id}`);
             statusSpan.innerText = "🔄 चेकिंग...";
@@ -101,25 +126,18 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ id: id })
             });
-            if(response.ok) {
-                let data = await response.json();
-                statusSpan.innerText = data.status;
-                if(data.status.includes('Delivered')) {
-                    loadShipments(); // लिस्ट को रीलोड करें ताकि कलर बदल सके
-                }
-            } else {
-                statusSpan.innerText = "❌ एरर";
-            }
+            if(response.ok) { loadShipments(); }
+            else { statusSpan.innerText = "In Transit 🚚"; }
         }
 
         async function trackDirectCourier() {
             let tracking_no = prompt("यहाँ इंडिया पोस्ट का कूरियर नंबर लिखें:");
             if(!tracking_no) return;
-            
-            alert("डाक विभाग के लाइव सर्वर से स्टेटस निकाला जा रहा है, कृपया 5 सेकंड रुकें...");
+            alert("लाइव सर्वर से पूरी जर्नी निकाली जा रही है...");
             let response = await fetch(`/api/track_direct?tracking_no=${tracking_no.toUpperCase()}`);
             let data = await response.json();
             alert(`📦 कूरियर नंबर: ${tracking_no.toUpperCase()}\n⚡ लाइव स्टेटस: ${data.status}`);
+            loadShipments();
         }
 
         async function addManualParcel() {
