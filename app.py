@@ -10,9 +10,8 @@ from flask import Flask, render_template, jsonify, request
 import telebot
 from pymongo import MongoClient
 from bson.objectid import ObjectId
-import easyocr
 
-# ⚙️ फाइनल कॉन्फ़िगरेशन सेटिंग्स
+# ⚙️ फाइनल कॉन्फ़िगरेशन
 BOT_TOKEN = "8266046259:AAHbq_TB6JOqAM-BYdZHXBfGIaZLrQbPYBw"
 MONGO_URI = "mongodb+srv://serdiyasixacshowroom99_db_user:yIIZMCDjV3qGyfnB@cluster0.zxnddtj.mongodb.net/?appName=Cluster0"
 
@@ -27,10 +26,7 @@ shipments_col = db['shipments']
 # भारी लोड और 50 रीसेलर्स को संभालने के लिए क्यू (Queue) सिस्टम
 photo_queue = queue.Queue()
 
-# EasyOCR लोड करना
-print("🤖 OCR इंजन लोड हो रहा है, कृपया प्रतीक्षा करें...")
-reader = easyocr.Reader(['en'])
-print("✅ OCR इंजन सफलतापूर्वक लोड हो गया!")
+print("⚡ लाइटवेट क्लाउड OCR सिस्टम एक्टिवेटेड!")
 
 # बिना कैप्चा ट्रैकिंग लॉजिक
 def fetch_india_post_status(tracking_no):
@@ -48,7 +44,25 @@ def fetch_india_post_status(tracking_no):
     except:
         return "Pending / Just Booked 📦"
 
-# बैकग्राउंड वर्कर जो एक बार में केवल 1 फोटो प्रोसेस करेगा (512MB RAM के लिए सेफ)
+# मुफ़्त क्लाउड OCR इंजन (रैम लोड = 0)
+def ocr_space_scan(img_path):
+    try:
+        payload = {
+            'isOverlayRequired': False,
+            'apikey': 'dontsharethiskey', # फ्री इंजन की-वर्ड
+            'language': 'eng',
+        }
+        with open(img_path, 'rb') as f:
+            r = requests.post('https://api.ocr.space/parse/image', files={'image': f}, data=payload, timeout=15)
+        result = r.json()
+        if result and "ParsedResults" in result and len(result["ParsedResults"]) > 0:
+            text = result["ParsedResults"][0]["ParsedText"]
+            return text.split('\n')
+    except:
+        pass
+    return []
+
+# बैकग्राउंड वर्कर (रेंडर की सुरक्षा के लिए)
 def photo_processor_worker():
     while True:
         task = photo_queue.get()
@@ -56,11 +70,15 @@ def photo_processor_worker():
         
         message, img_path, msg_id = task
         try:
-            # इमेज से टेक्स्ट पढ़ना
-            result = reader.readtext(img_path, detail=0)
+            # क्लाउड OCR से टेक्स्ट की लाइनें लाना
+            result = ocr_space_scan(img_path)
+            if not result:
+                bot.edit_message_text("❌ सर्वर व्यस्त है या फोटो धुंधली है। कृपया दोबारा साफ़ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
+                continue
+                
             full_text = "\n".join(result)
             
-            # रेगुलर एक्सप्रेशन पैटर्न्स (ट्रैकिंग, मोबाइल और COD अमाउंट)
+            # रेगुलर एक्सप्रेशन पैटर्न्स
             tracking_match = re.search(r'[A-Z]{2}\d{9}[A-Z]{2}', full_text.upper())
             phone_numbers = re.findall(r'\b\d{10}\b', full_text)
             cod_match = re.search(r'(?:COD|cod|CASH|cash|₹)\s*[:\-\s]*(\d+)', full_text)
@@ -72,7 +90,6 @@ def photo_processor_worker():
             tracking_no = tracking_match.group(0)
             cod_amount = cod_match.group(1) if cod_match else "0"
             
-            # मोबाइल और उसके ठीक ऊपर का नाम ढूंढना
             customer_name = "Unknown Customer"
             mobile1 = phone_numbers[0] if len(phone_numbers) > 0 else "0000000000"
             mobile2 = phone_numbers[1] if len(phone_numbers) > 1 else ""
@@ -85,7 +102,6 @@ def photo_processor_worker():
 
             status = fetch_india_post_status(tracking_no)
             
-            # क्लाउड में सुरक्षित सेव करना
             shipments_col.insert_one({
                 'telegram_user_id': message.from_user.id,
                 'tracking_no': tracking_no,
@@ -106,7 +122,7 @@ def photo_processor_worker():
         except Exception as e:
             bot.edit_message_text(f"❌ त्रुटि: {str(e)}", chat_id=message.chat.id, message_id=msg_id)
         finally:
-            if os.path.exists(img_path): os.remove(img_path)  # 🚨 रेंडर की रैम तुरंत खाली करना
+            if os.path.exists(img_path): os.remove(img_path)
             photo_queue.task_done()
 
 @bot.message_handler(commands=['start', 'help'])
@@ -148,10 +164,9 @@ def delete_shipment():
         return jsonify({'success': True}), 200
     return jsonify({'success': False}), 400
 
-# ऑटोमैटिक स्टेटस ट्रैकिंग सिंक (हर 1 घंटे में बैकग्राउंड में चलेगा)
 def auto_track_sync():
     while True:
-        time.sleep(3600)  # 1 घंटा
+        time.sleep(3600)
         try:
             shipments = shipments_col.find()
             for s in shipments:
