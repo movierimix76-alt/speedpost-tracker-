@@ -3,12 +3,12 @@ import re
 import queue
 import threading
 import requests
+import time
 from flask import Flask, render_template, jsonify, request
 import telebot
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# ⚙️ कॉन्फ़िगरेशन
 BOT_TOKEN = "8266046259:AAHbq_TB6JOqAM-BYdZHXBfGIaZLrQbPYBw"
 MONGO_URI = "mongodb+srv://serdiyasixacshowroom99_db_user:yIIZMCDjV3qGyfnB@cluster0.zxnddtj.mongodb.net/?appName=Cluster0"
 OCR_API_KEY = "K81758351788957"
@@ -22,43 +22,44 @@ shipments_col = db['shipments']
 
 photo_queue = queue.Queue()
 
-# 🚚 इंडिया पोस्ट का 100% मुफ़्त और पूरी कुंडली (History) निकालने वाला इंजन
+# 🚚 17TRACK का मुफ़्त लाइव और फुल टाइमलाइन ट्रैकर इंजन
 def fetch_real_live_status(tracking_no):
     default_res = {"status": "In Transit 🚚", "history": []}
     try:
-        # डाक विभाग का लाइव और मुफ़्त डेटा सर्वर रूट
-        url = f"https://api.reliancepost.co.in/track/{tracking_no}" # यह मुफ़्त पब्लिक रूट है जो पूरी हिस्ट्री देता है
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
+        # 17TRACK का डायरेक्ट पब्लिक API कॉल जो बिल्कुल मुफ़्त है
+        url = "https://www.17track.net/rest/v1/handy/carrier/query"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Content-Type": "application/json"
+        }
+        payload = {"data": [{"b": tracking_no, "e": 100015}]} # 100015 = इण्डिया पोस्ट कोड
         
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
         if response.status_code == 200:
-            data = response.json()
-            raw_status = data.get("status", "").lower()
+            res_json = response.json()
+            events = res_json.get("data", {}).get("accepted", [{}])[0].get("events", [])
+            state = res_json.get("data", {}).get("accepted", [{}])[0].get("status", 0)
             
+            # स्टेटस मैपिंग
             status = "In Transit 🚚"
-            if "delivered" in raw_status: status = "Delivered ✅"
-            elif "out for delivery" in raw_status: status = "Out for Delivery 🛵"
-            elif "booked" in raw_status and len(data.get("history", [])) <= 1: status = "Pending / Just Booked 📦"
+            if state == 40: status = "Delivered ✅"
+            elif state == 30: status = "Out for Delivery 🛵"
+            elif state == 10: status = "Pending / Just Booked 📦"
             
             history = []
-            for item in data.get("history", []):
+            for ev in events:
                 history.append({
-                    "date": item.get("date", ""),
-                    "location": item.get("location", "India Post Office"),
-                    "details": item.get("activity", "पार्सल प्रोसेस में है")
+                    "date": ev.get("time", ""),
+                    "location": ev.get("place", "India Post Office"),
+                    "details": ev.get("context", "पार्सल प्रोसेस हो रहा है")
                 })
             
-            return {"status": status, "history": history}
-            
+            if history:
+                return {"status": status, "history": history}
     except:
-        # बैकअप मुफ़्त फॉलबैक रूट
-        try:
-            url2 = f"https://trackcourier.co/track-status/india-post/{tracking_no}"
-            r2 = requests.get(url2, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
-            if "delivered" in r2.text.lower():
-                return {"status": "Delivered ✅", "history": [{"date": "लाइव", "location": "गंतव्य", "details": "पार्सल सफलतापूर्वक डिलीवर हो गया है"}]}
-        except: pass
-
+        pass
+        
+    # फॉलबैक (अगर 17TRACK रिस्पॉन्स न दे तो कम से कम एरर न आए)
     return default_res
 
 def ocr_space_scan(img_path):
@@ -80,7 +81,7 @@ def photo_processor_worker():
         try:
             result = ocr_space_scan(img_path)
             if not result:
-                bot.edit_message_text("❌ फोटो साफ़ नहीं है। दोबारा भेजें।", chat_id=message.chat.id, message_id=msg_id)
+                bot.edit_message_text("❌ फोटो धुंधली है। दोबारा भेजें।", chat_id=message.chat.id, message_id=msg_id)
                 continue
                 
             full_text = "\n".join(result)
@@ -124,7 +125,7 @@ def photo_processor_worker():
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "👋 स्वागत है! पार्सल रसीद की फोटो भेजें।")
+    bot.reply_to(message, "👋 स्वागत है! पार्सल की फोटो भेजें।")
 
 @bot.message_handler(content_types=['photo'])
 def handle_receipt_photo(message):
