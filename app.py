@@ -11,7 +11,7 @@ import telebot
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# ⚙️ फाइनल कॉन्फ़िगरेशन (आपका टोकन, मोंगो लिंक और OCR की सब कुछ सेट कर दिया है)
+# ⚙️ कॉन्फ़िगरेशन
 BOT_TOKEN = "8266046259:AAHbq_TB6JOqAM-BYdZHXBfGIaZLrQbPYBw"
 MONGO_URI = "mongodb+srv://serdiyasixacshowroom99_db_user:yIIZMCDjV3qGyfnB@cluster0.zxnddtj.mongodb.net/?appName=Cluster0"
 OCR_API_KEY = "K81758351788957"
@@ -19,17 +19,12 @@ OCR_API_KEY = "K81758351788957"
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# क्लाउड डेटाबेस कनेक्शन
 client = MongoClient(MONGO_URI)
 db = client['tracking_business_db']
 shipments_col = db['shipments']
 
-# भारी लोड और रीसेलर्स को संभालने के लिए क्यू (Queue) सिस्टम
 photo_queue = queue.Queue()
 
-print("⚡ लाइटवेट क्लाउड OCR सिस्टम एक्टिवेटेड!")
-
-# बिना कैप्चा ट्रैकिंग लॉजिक (इंडिया पोस्ट स्टेटस चेक)
 def fetch_india_post_status(tracking_no):
     try:
         url = f"https://speedposttrack.io/track/{tracking_no}"
@@ -45,7 +40,6 @@ def fetch_india_post_status(tracking_no):
     except:
         return "Pending / Just Booked 📦"
 
-# मुफ़्त क्लाउड OCR इंजन (रैम लोड = 0)
 def ocr_space_scan(img_path):
     try:
         payload = {
@@ -57,43 +51,33 @@ def ocr_space_scan(img_path):
             r = requests.post('https://api.ocr.space/parse/image', files={'image': f}, data=payload, timeout=15)
         result = r.json()
         if result and "ParsedResults" in result and len(result["ParsedResults"]) > 0:
-            text = result["ParsedResults"][0]["ParsedText"]
-            return text.split('\n')
-    except:
-        pass
+            return result["ParsedResults"][0]["ParsedText"].split('\n')
+    except: pass
     return []
 
-# बैकग्राउंड वर्कर (रेंडर की सुरक्षा के लिए)
 def photo_processor_worker():
     while True:
         task = photo_queue.get()
         if task is None: break
         
-        message, img_path, msg_id = task
+        message, img_path, msg_id, file_id = task
         try:
-            # क्लाउड OCR से टेक्स्ट की लाइनें लाना
             result = ocr_space_scan(img_path)
             if not result:
-                bot.edit_message_text("❌ सर्वर व्यस्त है या फोटो धुंधली है। कृपया दोबारा साफ़ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
+                bot.edit_message_text("❌ फोटो धुंधली है या सर्वर व्यस्त है। दोबारा साफ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
                 continue
                 
             full_text = "\n".join(result)
-            
-            # रेगुलर एक्सप्रेशन पैटर्न्स (AWB, मोबाइल नंबर और COD अमाउंट ढूंढने के लिए)
             tracking_match = re.search(r'[A-Z]{2}\d{9}[A-Z]{2}', full_text.upper())
             phone_numbers = re.findall(r'\b\d{10}\b', full_text)
-            cod_match = re.search(r'(?:COD|cod|CASH|cash|₹)\s*[:\-\s]*(\d+)', full_text)
             
             if not tracking_match:
-                bot.edit_message_text("❌ फोटो से ट्रैकिंग नंबर (AWB) साफ नहीं पढ़ा जा सका। कृपया दोबारा साफ़ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
+                bot.edit_message_text("❌ ट्रैकिंग नंबर (AWB) नहीं मिल पाया। कृपया साफ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
                 continue
 
             tracking_no = tracking_match.group(0)
-            cod_amount = cod_match.group(1) if cod_match else "0"
-            
             customer_name = "Unknown Customer"
             mobile1 = phone_numbers[0] if len(phone_numbers) > 0 else "0000000000"
-            mobile2 = phone_numbers[1] if len(phone_numbers) > 1 else ""
             
             if len(phone_numbers) > 0:
                 for i, text_line in enumerate(result):
@@ -103,23 +87,20 @@ def photo_processor_worker():
 
             status = fetch_india_post_status(tracking_no)
             
-            # मोंगो डेटाबेस में सुरक्षित सेव करना
+            # टेलीग्राम की फोटो का डायरेक्ट लिंक बनाना ताकि कस्टमर व्हाट्सऐप पर देख सके
+            file_info = bot.get_file(file_id)
+            image_cloud_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+            
             shipments_col.insert_one({
                 'telegram_user_id': message.from_user.id,
                 'tracking_no': tracking_no,
                 'name': customer_name,
                 'mobile1': mobile1,
-                'mobile2': mobile2,
-                'cod': cod_amount,
-                'status': status
+                'status': status,
+                'image_url': image_cloud_url
             })
             
-            response_text = f"✅ **शिपमेंट ऑटो-ऐड हो गया!**\n\n🆔 AWB नंबर: `{tracking_no}`\n👤 नाम: {customer_name}\n📱 Mob 1: {mobile1}\n"
-            if mobile2: response_text += f"📱 Mob 2: {mobile2}\n"
-            if cod_amount != "0": response_text += f"💵 COD Amount: ₹{cod_amount}\n"
-            response_text += f"⚡ स्टेटस: {status}"
-            
-            bot.edit_message_text(response_text, chat_id=message.chat.id, message_id=msg_id, parse_mode="Markdown")
+            bot.edit_message_text(f"✅ **पार्सल ऐड हो गया!**\n\n🆔 AWB: `{tracking_no}`\n👤 नाम: {customer_name}\n📱 मोबाइल: {mobile1}\n⚡ स्टेटस: {status}", chat_id=message.chat.id, message_id=msg_id, parse_mode="Markdown")
             
         except Exception as e:
             bot.edit_message_text(f"❌ त्रुटि: {str(e)}", chat_id=message.chat.id, message_id=msg_id)
@@ -129,33 +110,50 @@ def photo_processor_worker():
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "👋 नमस्ते! बस पार्सल के लेबल या रसीद की फोटो यहाँ भेजें, शिपमेंट ऑटोमैटिक ऐड हो जाएगा।\n\nनीचे दिए गए बटन से अपना आफ्टरशिप डैशबोर्ड खोलें।")
+    bot.reply_to(message, "👋 स्वागत है! पार्सल की फोटो भेजें या नीचे दिए गए डैशबोर्ड बटन से मैन्युअल एंट्री करें।")
 
 @bot.message_handler(content_types=['photo'])
 def handle_receipt_photo(message):
-    msg = bot.reply_to(message, "⏳ फोटो मिल गई है! इसे प्रोसेसिंग लाइन (Queue) में लगा दिया गया है। कृपया प्रतीक्षा करें...")
-    
-    file_info = bot.get_file(message.photo[-1].file_id)
+    msg = bot.reply_to(message, "⏳ फोटो मिल गई है, स्कैन किया जा रहा है...")
+    file_id = message.photo[-1].file_id
+    file_info = bot.get_file(file_id)
     downloaded_file = bot.download_file(file_info.file_path)
     img_path = f"receipt_{message.message_id}.jpg"
     
     with open(img_path, 'wb') as f:
         f.write(downloaded_file)
         
-    photo_queue.put((message, img_path, msg.message_id))
+    photo_queue.put((message, img_path, msg.message_id, file_id))
 
 # --- Web App Routes ---
 @app.route('/')
 def dashboard(): return render_template('index.html')
-
-@app.route('/health')
-def health(): return "24/7 Active", 200
 
 @app.route('/api/shipments')
 def get_shipments():
     shipments = list(shipments_col.find())
     for s in shipments: s['_id'] = str(s['_id'])
     return jsonify(shipments)
+
+# ➕ मैन्युअल पार्सल जोड़ने का नया API रूट
+@app.route('/api/add_manual', methods=['POST'])
+def add_manual():
+    data = request.json
+    name = data.get('name')
+    tracking_no = data.get('tracking_no', '').upper()
+    mobile1 = data.get('mobile1')
+    
+    if name and tracking_no and mobile1:
+        status = fetch_india_post_status(tracking_no)
+        shipments_col.insert_one({
+            'name': name,
+            'tracking_no': tracking_no,
+            'mobile1': mobile1,
+            'status': status,
+            'image_url': '' # मैन्युअल एंट्री में फोटो खाली रहेगी
+        })
+        return jsonify({'success': True}), 200
+    return jsonify({'success': False}), 400
 
 @app.route('/api/delete_shipment', methods=['POST'])
 def delete_shipment():
@@ -166,21 +164,7 @@ def delete_shipment():
         return jsonify({'success': True}), 200
     return jsonify({'success': False}), 400
 
-# ऑटोमैटिक स्टेटस सिंक (हर 1 घंटे में बैकग्राउंड में चलेगा)
-def auto_track_sync():
-    while True:
-        time.sleep(3600)
-        try:
-            shipments = shipments_col.find()
-            for s in shipments:
-                if "Delivered" not in s['status']:
-                    new_status = fetch_india_post_status(s['tracking_no'])
-                    if new_status != s['status']:
-                        shipments_col.update_one({'_id': s['_id']}, {'$set': {'status': new_status}})
-        except: pass
-
 if __name__ == "__main__":
     threading.Thread(target=photo_processor_worker, daemon=True).start()
-    threading.Thread(target=auto_track_sync, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
