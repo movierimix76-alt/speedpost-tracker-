@@ -42,11 +42,7 @@ def fetch_india_post_status(tracking_no):
 
 def ocr_space_scan(img_path):
     try:
-        payload = {
-            'isOverlayRequired': False,
-            'apikey': OCR_API_KEY,
-            'language': 'eng',
-        }
+        payload = {'isOverlayRequired': False, 'apikey': OCR_API_KEY, 'language': 'eng'}
         with open(img_path, 'rb') as f:
             r = requests.post('https://api.ocr.space/parse/image', files={'image': f}, data=payload, timeout=15)
         result = r.json()
@@ -59,12 +55,11 @@ def photo_processor_worker():
     while True:
         task = photo_queue.get()
         if task is None: break
-        
         message, img_path, msg_id, file_id = task
         try:
             result = ocr_space_scan(img_path)
             if not result:
-                bot.edit_message_text("❌ फोटो धुंधली है या सर्वर व्यस्त है। दोबारा साफ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
+                bot.edit_message_text("❌ फोटो से डेटा साफ़ नहीं पढ़ा जा सका। दोबारा साफ फोटो भेजें।", chat_id=message.chat.id, message_id=msg_id)
                 continue
                 
             full_text = "\n".join(result)
@@ -86,8 +81,6 @@ def photo_processor_worker():
                         break
 
             status = fetch_india_post_status(tracking_no)
-            
-            # टेलीग्राम की फोटो का डायरेक्ट लिंक बनाना ताकि कस्टमर व्हाट्सऐप पर देख सके
             file_info = bot.get_file(file_id)
             image_cloud_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
             
@@ -101,7 +94,6 @@ def photo_processor_worker():
             })
             
             bot.edit_message_text(f"✅ **पार्सल ऐड हो गया!**\n\n🆔 AWB: `{tracking_no}`\n👤 नाम: {customer_name}\n📱 मोबाइल: {mobile1}\n⚡ स्टेटस: {status}", chat_id=message.chat.id, message_id=msg_id, parse_mode="Markdown")
-            
         except Exception as e:
             bot.edit_message_text(f"❌ त्रुटि: {str(e)}", chat_id=message.chat.id, message_id=msg_id)
         finally:
@@ -110,7 +102,7 @@ def photo_processor_worker():
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "👋 स्वागत है! पार्सल की फोटो भेजें या नीचे दिए गए डैशबोर्ड बटन से मैन्युअल एंट्री करें।")
+    bot.reply_to(message, "👋 स्वागत है! पार्सल की फोटो भेजें या नीचे दिए गए डैशबोर्ड बटन का उपयोग करें।")
 
 @bot.message_handler(content_types=['photo'])
 def handle_receipt_photo(message):
@@ -119,10 +111,8 @@ def handle_receipt_photo(message):
     file_info = bot.get_file(file_id)
     downloaded_file = bot.download_file(file_info.file_path)
     img_path = f"receipt_{message.message_id}.jpg"
-    
     with open(img_path, 'wb') as f:
         f.write(downloaded_file)
-        
     photo_queue.put((message, img_path, msg.message_id, file_id))
 
 # --- Web App Routes ---
@@ -135,22 +125,25 @@ def get_shipments():
     for s in shipments: s['_id'] = str(s['_id'])
     return jsonify(shipments)
 
-# ➕ मैन्युअल पार्सल जोड़ने का नया API रूट
+# 🔍 बिना सेव किए सीधे अलग से ट्रैक करने की API
+@app.route('/api/track_direct', methods=['GET'])
+def track_direct():
+    tracking_no = request.args.get('tracking_no', '')
+    if tracking_no:
+        status = fetch_india_post_status(tracking_no)
+        return jsonify({'status': status}), 200
+    return jsonify({'status': 'Invalid Number'}), 400
+
 @app.route('/api/add_manual', methods=['POST'])
 def add_manual():
     data = request.json
     name = data.get('name')
     tracking_no = data.get('tracking_no', '').upper()
     mobile1 = data.get('mobile1')
-    
     if name and tracking_no and mobile1:
         status = fetch_india_post_status(tracking_no)
         shipments_col.insert_one({
-            'name': name,
-            'tracking_no': tracking_no,
-            'mobile1': mobile1,
-            'status': status,
-            'image_url': '' # मैन्युअल एंट्री में फोटो खाली रहेगी
+            'name': name, 'tracking_no': tracking_no, 'mobile1': mobile1, 'status': status, 'image_url': ''
         })
         return jsonify({'success': True}), 200
     return jsonify({'success': False}), 400
