@@ -7,10 +7,13 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f7f9fa; margin: 0; padding: 10px; }
+        .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        .action-btn { flex: 1; border: none; padding: 12px; border-radius: 10px; font-weight: bold; font-size: 13px; cursor: pointer; color: white; }
+        .add-btn { background: #007aff; }
+        .track-btn { background: #34c759; }
         .tabs { display: flex; justify-content: space-around; background: white; padding: 12px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; position: sticky; top: 0; z-index: 100; }
         .tab { font-weight: bold; color: #888; cursor: pointer; padding: 5px 15px; border-radius: 20px; transition: 0.2s; }
         .tab.active { color: white; background: #ff6b35; }
-        .add-manual-btn { background: #007aff; color: white; border: none; width: 100%; padding: 12px; border-radius: 10px; font-weight: bold; font-size: 14px; margin-bottom: 15px; cursor: pointer; }
         .card { background: white; border-radius: 12px; padding: 15px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); display: flex; justify-content: space-between; align-items: center; border-left: 5px solid #ff6b35; }
         .card.delivered-border { border-left-color: #34c759; }
         .info h3 { margin: 0 0 5px 0; font-size: 16px; color: #222; text-transform: capitalize; }
@@ -19,13 +22,16 @@
         .status-transit { background: #e3f2fd; color: #007aff; }
         .status-delivered { background: #e8f5e9; color: #34c759; }
         .actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
-        .wa-btn { background-color: #25D366; color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: bold; text-decoration: none; text-align: center; display: inline-flex; align-items: center; gap: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .wa-btn { background-color: #25D366; color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: bold; text-decoration: none; text-align: center; display: inline-flex; align-items: center; gap: 5px; }
         .del-btn { background: none; color: #ff3b30; border: none; font-size: 12px; cursor: pointer; padding: 5px; font-weight: bold; }
     </style>
 </head>
 <body>
 
-    <button class="add-manual-btn" onclick="addManualParcel()">➕ नया पार्सल जोड़ें (Manual Entry)</button>
+    <div class="btn-group">
+        <button class="action-btn add-btn" onclick="addManualParcel()">➕ नया पार्सल जोड़ें</button>
+        <button class="action-btn track-btn" onclick="trackDirectCourier()">🔍 कूरियर ट्रैक करें</button>
+    </div>
 
     <div class="tabs">
         <div class="tab active" onclick="filterTab('all', this)">All</div>
@@ -47,27 +53,24 @@
                 let data = await response.json();
                 renderCards(data);
             } catch (e) {
-                document.getElementById('shipments-container').innerHTML = '<p style="color:red; text-align:center;">डेटा लोड करने में त्रुटि!</p>';
+                document.getElementById('shipments-container').innerHTML = '<p style="color:red; text-align:center;">त्रुटि!</p>';
             }
         }
 
         function renderCards(shipments) {
             let container = document.getElementById('shipments-container');
             container.innerHTML = '';
-            
             if(shipments.length === 0) {
                 container.innerHTML = '<p style="text-align:center; color:#bbbbbb; margin-top:50px;">कोई शिपमेंट नहीं मिला।</p>';
                 return;
             }
-
             shipments.reverse().forEach(item => {
                 let isDelivered = item.status.includes('Delivered');
                 let statusClass = isDelivered ? 'status-delivered' : 'status-transit';
                 let borderClass = isDelivered ? 'delivered-border' : '';
                 
-                // व्हाट्सऐप मैसेज में फोटो लिंक भी जोड़ दिया गया है
-                let imgText = item.image_url ? `\n🖼️ पार्सल फोटो देखें: ${item.image_url}` : '';
-                let waMsg1 = `नमस्ते ${item.name}! आपका इंडिया पोस्ट पार्सल (${item.tracking_no}) का करंट स्टेटस ${item.status} है।${imgText}`;
+                let imgText = item.image_url ? `\n\n🖼️ पार्सल फोटो देखें: ${item.image_url}` : '';
+                let waMsg1 = `नमस्ते ${item.name}! आपका पार्सल (${item.tracking_no}) का करंट स्टेटस है: *${item.status}*।${imgText}`;
                 let wa1 = `https://wa.me/91${item.mobile1}?text=${encodeURIComponent(waMsg1)}`;
 
                 container.innerHTML += `
@@ -79,7 +82,7 @@
                             <p style="font-size:11px; margin-top:8px;">📱 ${item.mobile1}</p>
                         </div>
                         <div class="actions">
-                            <a href="${wa1}" target="_blank" class="wa-btn">🟢 WhatsApp 1</a>
+                            <a href="${wa1}" target="_blank" class="wa-btn">🟢 WhatsApp</a>
                             <button class="del-btn" onclick="deleteItem('${item._id}')">🗑️ डिलीट</button>
                         </div>
                     </div>
@@ -87,13 +90,21 @@
             });
         }
 
-        async function addManualParcel() {
-            let name = prompt("कस्टमर का नाम लिखें:");
-            if(!name) return;
-            let tracking_no = prompt("AWB / ट्रैकिंग नंबर लिखें:");
+        // 🔍 अलग से सिर्फ ट्रैक करने का विकल्प
+        async function trackDirectCourier() {
+            let tracking_no = prompt("यहाँ इंडिया पोस्ट का कूरियर नंबर (जैसे: AW123456789IN) लिखें:");
             if(!tracking_no) return;
-            let mobile1 = prompt("10 अंकों का मोबाइल नंबर:");
-            if(!mobile1) return;
+            
+            alert("कृपया प्रतीक्षा करें... लाइव स्टेटस चेक किया जा रहा है...");
+            let response = await fetch(`/api/track_direct?tracking_no=${tracking_no.toUpperCase()}`);
+            let data = await response.json();
+            alert(`📦 कूरियर नंबर: ${tracking_no.toUpperCase()}\n⚡ लाइव स्टेटस: ${data.status}`);
+        }
+
+        async function addManualParcel() {
+            let name = prompt("कस्टमर का नाम लिखें:"); if(!name) return;
+            let tracking_no = prompt("AWB / ट्रैकिंग नंबर लिखें:"); if(!tracking_no) return;
+            let mobile1 = prompt("10 अंकों का मोबाइल नंबर:"); if(!mobile1) return;
 
             let response = await fetch('/api/add_manual', {
                 method: 'POST',
@@ -107,11 +118,8 @@
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             element.classList.add('active');
             document.querySelectorAll('.card').forEach(card => {
-                if(type === 'all' || card.getAttribute('data-status') === type) {
-                    card.style.display = 'flex';
-                } else {
-                    card.style.display = 'none';
-                }
+                if(type === 'all' || card.getAttribute('data-status') === type) card.style.display = 'flex';
+                else card.style.display = 'none';
             });
         }
 
@@ -125,7 +133,6 @@
                 if(response.ok) { loadShipments(); }
             }
         }
-
         window.onload = loadShipments;
     </script>
 </body>
