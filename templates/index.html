@@ -16,13 +16,11 @@
         .tab.active { color: white; background: #ff6b35; }
         .card { background: white; border-radius: 12px; padding: 15px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); display: flex; flex-direction: column; gap: 10px; border-left: 5px solid #ff6b35; }
         .card.delivered-border { border-left-color: #34c759; }
-        .card-header-area { display: flex; justify-content: space-between; align-items: flex-start; width: 100%; }
         .info h3 { margin: 0 0 5px 0; font-size: 16px; color: #222; text-transform: capitalize; }
-        .info p { margin: 3px 0; font-size: 13px; color: #555; }
         .status { font-weight: bold; font-size: 13px; padding: 3px 8px; border-radius: 5px; display: inline-block; margin-top: 5px; }
         .status-transit { background: #e3f2fd; color: #007aff; }
         .status-delivered { background: #e8f5e9; color: #34c759; }
-        .timeline { background: #f8f9fa; border-radius: 8px; padding: 10px; font-size: 12px; color: #444; border-top: 1px solid #eee; margin-top: 5px; }
+        .timeline { background: #f8f9fa; border-radius: 8px; padding: 10px; font-size: 12px; color: #444; }
         .timeline-title { font-weight: bold; color: #333; margin-bottom: 5px; }
         .journey-step { border-left: 2px solid #ddd; padding-left: 10px; margin-left: 5px; padding-bottom: 8px; position: relative; }
         .journey-step::before { content: ''; position: absolute; left: -5px; top: 3px; width: 8px; height: 8px; background: #bbb; border-radius: 50%; }
@@ -32,13 +30,20 @@
         .wa-btn { background-color: #25D366; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; text-decoration: none; }
         .refresh-btn { background: #e0e0e0; color: #333; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: bold; }
         .del-btn { background: none; color: #ff3b30; border: none; font-size: 12px; cursor: pointer; font-weight: bold; }
+        
+        /* 🛡️ कैप्चा बॉक्स का डिज़ाइन */
+        .captcha-popup { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-20%, -50%); background: white; padding: 20px; border-radius: 15px; box-shadow: 0 5px 25px rgba(0,0,0,0.2); z-index: 1000; width: 280px; text-align: center; }
+        .captcha-popup img { max-width: 150px; margin-bottom: 10px; border: 1px solid #ddd; }
+        .captcha-popup input { width: 90%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 8px; text-align: center; font-size: 16px; font-weight: bold; }
+        .captcha-popup button { background: #ff6b35; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); z-index: 999; }
     </style>
 </head>
 <body>
 
     <div class="btn-group">
         <button class="action-btn add-btn" onclick="addManualParcel()">➕ नया पार्सल जोड़ें</button>
-        <button class="action-btn track-btn" onclick="trackDirectCourier()">🔍 कूरियर ट्रैक करें</button>
+        <button class="action-btn track-btn" onclick="askCaptchaDirect()">🔍 कूरियर ट्रैक करें</button>
     </div>
 
     <div class="tabs">
@@ -51,9 +56,18 @@
         <p style="text-align: center; color: #888;">लोड हो रहा है...</p>
     </div>
 
+    <div class="overlay" id="overlay"></div>
+    <div class="captcha-popup" id="captcha-box">
+        <h3>🛡️ सुरक्षा सत्यापन</h3>
+        <p style="font-size: 12px; color: #666;">नीचे इमेज में दिख रहा कैप्चा कोड भरें:</p>
+        <div id="captcha-img-container"></div>
+        <input type="text" id="captcha-input" placeholder="यहाँ कोड लिखें" autocomplete="off">
+        <button id="captcha-submit-btn">सत्यापित करें ✅</button>
+    </div>
+
     <script>
-        let tg = window.Telegram.WebApp;
-        tg.expand();
+        let currentActiveId = null;
+        let currentDirectTrackingNo = null;
 
         async function loadShipments() {
             try {
@@ -69,48 +83,46 @@
             let container = document.getElementById('shipments-container');
             container.innerHTML = '';
             if(!shipments || shipments.length === 0) {
-                container.innerHTML = '<p style="text-align:center; color:#bbbbbb; margin-top:50px;">कोई शिपमेंट नहीं मिला।</p>';
+                container.innerHTML = '<p style="text-align:center; color:#bbbbbb; margin-top:50px;">कोई पार्सल नहीं मिला।</p>';
                 return;
             }
             shipments.reverse().forEach(item => {
-                let currentStatus = item.status || "In Transit 🚚";
-                let isDelivered = currentStatus.includes('Delivered');
+                let isDelivered = (item.status || "").includes('Delivered');
                 let statusClass = isDelivered ? 'status-delivered' : 'status-transit';
                 let borderClass = isDelivered ? 'delivered-border' : '';
                 
                 let imgText = item.image_url ? `\n\n🖼️ पार्सल फोटो देखें: ${item.image_url}` : '';
-                let waMsg1 = `नमस्ते ${item.name || 'Customer'}! आपका पार्सल (${item.tracking_no}) का लाइव स्टेटस है: *${currentStatus}*।${imgText}`;
-                let wa1 = `https://wa.me/91${item.mobile1}?text=${encodeURIComponent(waMsg1)}`;
+                let waMsg = `नमस्ते ${item.name || 'Customer'}! आपका पार्सल (${item.tracking_no}) का लाइव स्टेटस है: *${item.status || 'In Transit'}*।${imgText}`;
+                let wa1 = `https://wa.me/91${item.mobile1}?text=${encodeURIComponent(waMsg)}`;
 
                 let historyHtml = '<div class="timeline"><div class="timeline-title">📍 पार्सल जर्नी ट्रैक हिस्ट्री:</div>';
                 if (item.history && item.history.length > 0) {
                     item.history.forEach((step, idx) => {
-                        let isLatest = idx === 0 ? 'latest' : '';
                         historyHtml += `
-                            <div class="journey-step ${isLatest}">
-                                <div><b>${step.location || 'India Post'}</b>: ${step.details || 'Processing'}</div>
-                                <div class="journey-date">${step.date || ''}</div>
+                            <div class="journey-step ${idx === 0 ? 'latest' : ''}">
+                                <div><b>${step.location}</b>: ${step.details}</div>
+                                <div class="journey-date">${step.date}</div>
                             </div>`;
                     });
                 } else {
-                    historyHtml += '<div class="journey-step latest"><div>डेटा अपडेट हो रहा है, कृपया रिफ्रेश बटन दबाएं।</div></div>';
+                    historyHtml += '<div class="journey-step latest"><div>पूरी जर्नी देखने के लिए कृपया एक बार रिफ्रेश करें।</div></div>';
                 }
                 historyHtml += '</div>';
 
                 container.innerHTML += `
                     <div class="card ${borderClass}" data-status="${isDelivered ? 'delivered' : 'shipping'}">
-                        <div class="card-header-area">
+                        <div style="padding: 15px 15px 0 15px;">
                             <div class="info">
                                 <h3>${item.name || 'Unknown'}</h3>
                                 <p><b>#${item.tracking_no}</b></p>
-                                <span class="status ${statusClass}" id="status-${item._id}">${currentStatus}</span>
+                                <span class="status ${statusClass}">${item.status || 'In Transit 🚚'}</span>
                                 <p style="font-size:11px; margin-top:8px;">📱 ${item.mobile1 || ''}</p>
                             </div>
                         </div>
-                        ${historyHtml}
-                        <div class="actions">
+                        <div style="padding: 0 15px;">${historyHtml}</div>
+                        <div class="actions" style="padding: 10px 15px;">
                             <a href="${wa1}" target="_blank" class="wa-btn">🟢 WhatsApp</a>
-                            <button class="refresh-btn" onclick="refreshItem('${item._id}')">🔄 रिफ्रेश स्टेटस</button>
+                            <button class="refresh-btn" onclick="openCaptcha('${item._id}', null)">🔄 रिफ्रेश स्टेटस</button>
                             <button class="del-btn" onclick="deleteItem('${item._id}')">🗑️ डिलीट</button>
                         </div>
                     </div>
@@ -118,27 +130,53 @@
             });
         }
 
-        async function refreshItem(id) {
-            let statusSpan = document.getElementById(`status-${id}`);
-            statusSpan.innerText = "🔄 चेकिंग...";
-            let response = await fetch('/api/refresh_shipment', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ id: id })
-            });
-            if(response.ok) { loadShipments(); }
-            else { statusSpan.innerText = "In Transit 🚚"; }
+        // 🔄 लाइव कैप्चा बॉक्स खोलना
+        async function openCaptcha(id, directTrackingNo) {
+            currentActiveId = id;
+            currentDirectTrackingNo = directTrackingNo;
+            document.getElementById('captcha-input').value = '';
+            
+            // सर्वर से लाइव नया कैप्चा इमेज मंगवाना
+            document.getElementById('captcha-img-container').innerHTML = '⏳ कैप्चा लोड हो रहा है...';
+            document.getElementById('overlay').style.display = 'block';
+            document.getElementById('captcha-box').style.display = 'block';
+            
+            let res = await fetch('/api/get_captcha');
+            let data = await res.json();
+            
+            document.getElementById('captcha-img-container').innerHTML = `<img src="data:image/png;base64,${data.captcha_img}" id="captcha-image">`;
         }
 
-        async function trackDirectCourier() {
+        function askCaptchaDirect() {
             let tracking_no = prompt("यहाँ इंडिया पोस्ट का कूरियर नंबर लिखें:");
             if(!tracking_no) return;
-            alert("लाइव सर्वर से पूरी जर्नी निकाली जा रही है...");
-            let response = await fetch(`/api/track_direct?tracking_no=${tracking_no.toUpperCase()}`);
-            let data = await response.json();
-            alert(`📦 कूरियर नंबर: ${tracking_no.toUpperCase()}\n⚡ लाइव स्टेटस: ${data.status}`);
-            loadShipments();
+            openCaptcha(null, tracking_no.toUpperCase());
         }
+
+        // submit बटन दबाने पर वेरिफिकेशन भेजना
+        document.getElementById('captcha-submit-btn').onclick = async function() {
+            let captchaCode = document.getElementById('captcha-input').value;
+            if(!captchaCode) { alert("कृपया कैप्चा कोड टाइप करें!"); return; }
+            
+            document.getElementById('captcha-box').style.display = 'none';
+            document.getElementById('overlay').style.display = 'none';
+            
+            if(currentActiveId) {
+                // डैशबोर्ड वाले पार्सल को रिफ्रेश करना
+                let res = await fetch('/api/refresh_shipment', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ id: currentActiveId, captcha: captchaCode })
+                });
+                loadShipments();
+            } else if(currentDirectTrackingNo) {
+                // अलग से सिर्फ ट्रैक करना
+                let res = await fetch(`/api/track_direct?tracking_no=${currentDirectTrackingNo}&captcha=${captchaCode}`);
+                let data = await res.json();
+                alert(`📦 कूरियर: ${currentDirectTrackingNo}\n⚡ लाइव स्थिति:\n${data.status}`);
+                loadShipments();
+            }
+        };
 
         async function addManualParcel() {
             let name = prompt("कस्टमर का नाम लिखें:"); if(!name) return;
