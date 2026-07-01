@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeedPost Tracking Dashboard</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f7f9fa; margin: 0; padding: 10px; }
+        .tabs { display: flex; justify-content: space-around; background: white; padding: 12px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; position: sticky; top: 0; z-index: 100; }
+        .tab { font-weight: bold; color: #888; cursor: pointer; padding: 5px 15px; border-radius: 20px; transition: 0.2s; }
+        .tab.active { color: white; background: #ff6b35; }
+        .card { background: white; border-radius: 12px; padding: 15px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); display: flex; justify-content: space-between; align-items: center; border-left: 5px solid #ff6b35; }
+        .card.delivered-border { border-left-color: #34c759; }
+        .info h3 { margin: 0 0 5px 0; font-size: 16px; color: #222; text-transform: capitalize; }
+        .info p { margin: 3px 0; font-size: 13px; color: #555; }
+        .status { font-weight: bold; font-size: 13px; padding: 3px 8px; border-radius: 5px; display: inline-block; margin-top: 5px; }
+        .status-transit { background: #e3f2fd; color: #007aff; }
+        .status-delivered { background: #e8f5e9; color: #34c759; }
+        .actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+        .wa-btn { background-color: #25D366; color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: bold; text-decoration: none; text-align: center; display: inline-flex; align-items: center; gap: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .del-btn { background: none; color: #ff3b30; border: none; font-size: 12px; cursor: pointer; padding: 5px; font-weight: bold; }
+        .cod-tag { background: #fff3e0; color: #e65100; font-weight: bold; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+    <div class="tabs">
+        <div class="tab active" onclick="filterTab('all', this)">All</div>
+        <div class="tab" onclick="filterTab('shipping', this)">Shipping 🚚</div>
+        <div class="tab" onclick="filterTab('delivered', this)">Delivered ✅</div>
+    </div>
+
+    <div id="shipments-container">
+        <p style="text-align: center; color: #888;">लोड हो रहा है...</p>
+    </div>
+
+    <script>
+        let tg = window.Telegram.WebApp;
+        tg.expand();
+
+        async function loadShipments() {
+            try {
+                let response = await fetch('/api/shipments');
+                let data = await response.json();
+                renderCards(data);
+            } catch (e) {
+                document.getElementById('shipments-container').innerHTML = '<p style="color:red; text-align:center;">डेटा लोड करने में त्रुटि!</p>';
+            }
+        }
+
+        function renderCards(shipments) {
+            let container = document.getElementById('shipments-container');
+            container.innerHTML = '';
+            
+            if(shipments.length === 0) {
+                container.innerHTML = '<p style="text-align:center; color:#bbbbbb; margin-top:50px;">कोई शिपमेंट नहीं मिला। बॉट पर फोटो भेजें!</p>';
+                return;
+            }
+
+            shipments.reverse().forEach(item => {
+                let isDelivered = item.status.includes('Delivered');
+                let statusClass = isDelivered ? 'status-delivered' : 'status-transit';
+                let borderClass = isDelivered ? 'delivered-border' : '';
+                
+                let waMsg1 = `नमस्ते ${item.name}! आपका इंडिया पोस्ट पार्सल (${item.tracking_no}) का करंट स्टेटस ${item.status} है।`;
+                let wa1 = `https://wa.me/91${item.mobile1}?text=${encodeURIComponent(waMsg1)}`;
+                
+                let wa2Btn = '';
+                if(item.mobile2) {
+                    let waMsg2 = `नमस्ते ${item.name}! आपका इंडिया पोस्ट पार्सल (${item.tracking_no}) का करंट स्टेटस ${item.status} है।`;
+                    let wa2 = `https://wa.me/91${item.mobile2}?text=${encodeURIComponent(waMsg2)}`;
+                    wa2Btn = `<a href="${wa2}" target="_blank" class="wa-btn" style="background-color:#128C7E;">🟢 WA 2</a>`;
+                }
+
+                container.innerHTML += `
+                    <div class="card ${borderClass}" data-status="${isDelivered ? 'delivered' : 'shipping'}">
+                        <div class="info">
+                            <h3>${item.name}</h3>
+                            <p><b>#${item.tracking_no}</b></p>
+                            <p style="color:#999; font-size:11px;">India Post Domestic</p>
+                            ${item.cod !== "0" ? `<span class="cod-tag">COD: ₹${item.cod}</span>` : ''}
+                            <br><span class="status ${statusClass}">${item.status}</span>
+                            <p style="font-size:11px; margin-top:8px;">📱 ${item.mobile1} ${item.mobile2 ? ' / ' + item.mobile2 : ''}</p>
+                        </div>
+                        <div class="actions">
+                            <a href="${wa1}" target="_blank" class="wa-btn">🟢 WhatsApp 1</a>
+                            ${wa2Btn}
+                            <button class="del-btn" onclick="deleteItem('${item._id}')">🗑️ डिलीट</button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        function filterTab(type, element) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            element.classList.add('active');
+            
+            document.querySelectorAll('.card').forEach(card => {
+                if(type === 'all' || card.getAttribute('data-status') === type) {
+                    card.style.display = 'flex';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+
+        async function deleteItem(id) {
+            if(confirm("क्या आप इस पार्सल को रिकॉर्ड से हटाना चाहते हैं?")) {
+                let response = await fetch('/api/delete_shipment', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ id: id })
+                });
+                if(response.ok) { loadShipments(); }
+            }
+        }
+
+        window.onload = loadShipments;
+    </script>
+</body>
+</html>
