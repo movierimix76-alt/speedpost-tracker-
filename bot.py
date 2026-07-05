@@ -94,8 +94,9 @@ def handle_prompt(message):
             time.sleep(10)
             operation = client.operations.get(operation)
             
-        # 4. रिजल्ट प्राप्त करना (यहाँ सुधारा गया सिंटैक्स - सीधे operation से वीडियो निकालना)
-        generated_videos = getattr(operation, 'generated_videos', None)
+        # 4. रिजल्ट प्राप्त करना (यहाँ सही सुधारा हुआ स्ट्रक्चर है)
+        op_result = getattr(operation, 'response', operation)
+        generated_videos = getattr(op_result, 'generated_videos', None)
         
         if generated_videos and len(generated_videos) > 0:
             video_file_obj = generated_videos[0].video
@@ -139,5 +140,5 @@ if __name__ == "__main__":
     t = Thread(target=run_port)
     t.start()
     
-    print("बॉट सफलता पूर्वक चालू हो गया है और पोर्ट एक्टिव है...")
+    print("बॉट सफलता पूर्वक चालू हो गया है...")
     bot.infinity_polling()
