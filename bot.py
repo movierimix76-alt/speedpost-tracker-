@@ -22,7 +22,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is alive and running!"
+    return "Bot is alive and running with Veo Video Generator!"
 
 def run_port():
     port = int(os.environ.get("PORT", 10000))
@@ -72,43 +72,58 @@ def handle_prompt(message):
         return
         
     local_video_path = user_sessions[chat_id]['video_path']
-    status_msg = bot.reply_to(message, "🚀 AI आपका वीडियो प्रोसेस कर रहा है... इसमें थोड़ा समय लग सकता है।")
+    status_msg = bot.reply_to(message, "🚀 Google Veo AI आपका वीडियो जनरेट कर रहा है... इसमें थोड़ा समय (1-2 मिनट) लग सकता है।")
     
     try:
         # 1. वीडियो को Google File API पर अपलोड करना
         print(f"गूगल सर्वर पर अपलोड हो रहा है: {local_video_path}")
         google_video_file = client.files.upload(file=local_video_path)
         
-        # 2. वीडियो प्रोसेसिंग पूरी होने का इंतजार करना
+        # 2. इनपुट वीडियो प्रोसेसिंग पूरी होने का इंतजार करना
         while google_video_file.state.name == "PROCESSING":
             time.sleep(4)
             google_video_file = client.files.get(name=google_video_file.name)
             
         if google_video_file.state.name == "FAILED":
-            raise ValueError("गूगल सर्वर पर वीडियो प्रोसेस नहीं हो पाया।")
+            raise ValueError("गूगल सर्वर पर इनपुट वीडियो प्रोसेस नहीं हो पाया।")
             
-        # 3. लेटेस्ट स्टेबल मॉडल (gemini-2.5-flash) को कॉल करना
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[google_video_file, prompt_text]
+        # 3. Veo वीडियो जनरेशन मॉडल का उपयोग करना
+        # वीडियो एडिटिंग/ट्रांसफ़ॉर्मेशन के लिए हम इनपुट वीडियो और प्रॉम्ट दोनों Veo को भेज रहे हैं
+        operation = client.models.generate_videos(
+            model='veo-3.1-fast-generate-preview',
+            prompt=prompt_text,
+            config=types.GenerateVideosConfig(
+                # आप चाहें तो यहाँ ड्यूरेशन (4, 6 या 8) या अस्पेक्ट रेशियो बदल सकते हैं
+                duration_seconds=4,
+                aspect_ratio="16:9"
+            )
         )
         
-        output_filename = f"edited_{chat_id}.mp4"
-        
-        # 4. आउटपुट प्राप्त करना और उसे सुरक्षित रूप से सेव करना
-        if hasattr(response, 'generated_bytes') and response.generated_bytes:
-            with open(output_filename, "wb") as f:
-                f.write(response.generated_bytes)
+        # 4. वीडियो जनरेट होने की असिंक्रोनस प्रोसेस का इंतजार करना (Polling)
+        print("Veo वीडियो जनरेशन शुरू हो गया है, इंतजार कर रहे हैं...")
+        while not operation.done:
+            time.sleep(10)
+            operation = client.operations.get(operation)
+            
+        # 5. रिजल्ट प्राप्त करना
+        generated_videos = operation.result.generated_videos
+        if generated_videos and len(generated_videos) > 0:
+            video_file_obj = generated_videos[0].video
+            
+            output_filename = f"edited_{chat_id}.mp4"
+            
+            # वीडियो बाइट्स डाउनलोड करके लोकल सर्वर पर सेव करना
+            client.files.download(file=video_file_obj, path=output_filename)
                 
             # यूजर को एडिटेड वीडियो वापस भेजना
             with open(output_filename, 'rb') as video_to_send:
-                bot.send_video(chat_id, video_to_send, caption="✨ AI द्वारा एडिट किया गया वीडियो!")
+                bot.send_video(chat_id, video_to_send, caption="✨ Google Veo द्वारा जनरेट किया गया बिल्कुल नया वीडियो!")
                 
+            # अस्थाई आउटपुट फाइल डिलीट करना
             if os.path.exists(output_filename):
                 os.remove(output_filename)
         else:
-            # अगर मॉडल सीधा वीडियो न देकर कोई टेक्स्ट सुझाव या जवाब दे
-            bot.send_message(chat_id, f"🤖 मॉडल का जवाब:\n{response.text}")
+            bot.send_message(chat_id, "🤖 मॉडल ने कोई एरर नहीं दिया, लेकिन वीडियो जनरेट नहीं हो सका। कृपया दूसरा प्रॉम्ट आज़माएँ।")
 
     except Exception as e:
         bot.send_message(chat_id, f"❌ प्रोसेसिंग के दौरान त्रुटि आई: {str(e)}")
