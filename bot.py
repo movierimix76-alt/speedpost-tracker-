@@ -25,7 +25,6 @@ def home():
     return "Bot is alive and running!"
 
 def run_port():
-    # Render खुद 'PORT' एनवायरनमेंट वेरिएबल देता है, डिफ़ॉल्ट 10000 रखें
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
@@ -61,7 +60,7 @@ def handle_video(message):
     except Exception as e:
         bot.send_message(chat_id, f"❌ वीडियो प्राप्त करने में एरर आया: {str(e)}")
 
-# 当 यूजर प्रॉम्ट (टेक्स्ट मैसेज) भेजता है
+# जब यूजर प्रॉम्ट (टेक्स्ट मैसेज) भेजता है
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def handle_prompt(message):
     chat_id = message.chat.id
@@ -73,7 +72,7 @@ def handle_prompt(message):
         return
         
     local_video_path = user_sessions[chat_id]['video_path']
-    status_msg = bot.reply_to(message, "🚀 Omni Flash AI आपका वीडियो प्रोसेस कर रहा है... इसमें थोड़ा समय लग सकता है।")
+    status_msg = bot.reply_to(message, "🚀 AI आपका वीडियो प्रोसेस कर रहा है... इसमें थोड़ा समय लग सकता है।")
     
     try:
         # 1. वीडियो को Google File API पर अपलोड करना
@@ -88,29 +87,27 @@ def handle_prompt(message):
         if google_video_file.state.name == "FAILED":
             raise ValueError("गूगल सर्वर पर वीडियो प्रोसेस नहीं हो पाया।")
             
-        # 3. Omni Flash मॉडल को कॉल करना
+        # 3. लेटेस्ट स्टेबल मॉडल (gemini-2.5-flash) को कॉल करना
         response = client.models.generate_content(
-            model='gemini-omni-flash-preview',
+            model='gemini-2.5-flash',
             contents=[google_video_file, prompt_text]
         )
         
         output_filename = f"edited_{chat_id}.mp4"
         
         # 4. आउटपुट प्राप्त करना और उसे सुरक्षित रूप से सेव करना
-        # नए क्लाइंट में सीधा जनरेटेड डेटा डाउनलोड करने का तरीका
         if hasattr(response, 'generated_bytes') and response.generated_bytes:
             with open(output_filename, "wb") as f:
                 f.write(response.generated_bytes)
                 
             # यूजर को एडिटेड वीडियो वापस भेजना
             with open(output_filename, 'rb') as video_to_send:
-                bot.send_video(chat_id, video_to_send, caption="✨ Omni Flash द्वारा एडिट किया गया वीडियो!")
+                bot.send_video(chat_id, video_to_send, caption="✨ AI द्वारा एडिट किया गया वीडियो!")
                 
-            # आउटपुट फाइल डिलीट करना
             if os.path.exists(output_filename):
                 os.remove(output_filename)
         else:
-            # अगर मॉडल सीधा वीडियो न देकर कोई टेक्स्ट सुझाव या एरर दे
+            # अगर मॉडल सीधा वीडियो न देकर कोई टेक्स्ट सुझाव या जवाब दे
             bot.send_message(chat_id, f"🤖 मॉडल का जवाब:\n{response.text}")
 
     except Exception as e:
@@ -118,13 +115,10 @@ def handle_prompt(message):
         
     finally:
         # --- सर्वर स्पेस मैनेजमेंट ---
-        # काम खत्म होने के बाद Render सर्वर से ओरिजिनल वीडियो तुरंत डिलीट कर देना
         if os.path.exists(local_video_path):
             os.remove(local_video_path)
-        # सेशन क्लियर करना ताकि नया वीडियो भेजा जा सके
         if chat_id in user_sessions:
             del user_sessions[chat_id]
-        # अस्थाई स्टेटस मैसेज डिलीट करना
         try:
             bot.delete_message(chat_id, status_msg.message_id)
         except:
@@ -132,7 +126,6 @@ def handle_prompt(message):
 
 # मुख्य फ़ंक्शन जो पोर्ट और बॉट दोनों को एक साथ चालू रखेगा
 if __name__ == "__main__":
-    # पोर्ट सर्विस को अलग थ्रेड में चालू करें ताकि बॉट का पोलिंग सिस्टम न रुके
     t = Thread(target=run_port)
     t.start()
     
