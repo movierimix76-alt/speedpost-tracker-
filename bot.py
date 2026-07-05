@@ -1,7 +1,6 @@
 import os
 import time
 import telebot
-from telebot import types
 import google.generativeai as genai
 
 # --- कॉन्फ़िगरेशन (Render के Environment Variables से ऑटोमैटिक लोड होगा) ---
@@ -76,40 +75,47 @@ def handle_prompt(message):
         model = genai.GenerativeModel('gemini-omni-flash-preview')
         response = model.generate_content([google_video_file, prompt_text])
         
-        # 4. आउटपुट प्राप्त करना
-        # नोट: जब ओम्नी फ्लैश वीडियो डेटा सीधे बाइनरी में देता है तो उसे ऐसे सेव करते हैं
+        # 4. आउटपुट प्राप्त करना और उसे सुरक्षित रूप से सेव करना
         output_filename = f"edited_{chat_id}.mp4"
         
-        try:
-            # अगर मॉडल सीधा वीडियो डेटा वापस भेजता है
+        # यहाँ एरर को ठीक करने के लिए सीधा डेटा चेक और एक्सट्रैक्शन लॉजिक लगाया है
+        if hasattr(response, 'data') and response.data:
+            video_bytes = response.data
+        else:
+            # बैकअप तरीका अगर रिस्पांस ऑब्जेक्ट अलग संरचना में हो
             video_bytes = response.candidates[0].content.parts[0].inline_data.data
-            with open(output_filename, "wb") as f:
-                f.write(video_bytes)
-                
-            # यूजर को एडिटेड वीडियो वापस भेजना
-            with open(output_filename, 'rb') as video_to_send:
-                bot.send_video(chat_id, video_to_send, caption="✨ Omni Flash द्वारा एडिट किया गया वीडियो!")
-                
-            # आउटपुट फाइल डिलीट करना
-            if os.path.exists(output_filename):
-                os.remove(output_filename)
-        except Exception:
-            # अगर मॉडल केवल टेक्स्ट सुझाव या एरर रिस्पॉन्स देता है
-            bot.send_message(chat_id, f"🤖 मॉडल का जवाब:\n{response.text}")
+
+        with open(output_filename, "wb") as f:
+            f.write(video_bytes)
+            
+        # यूजर को एडिटेड वीडियो वापस भेजना
+        with open(output_filename, 'rb') as video_to_send:
+            bot.send_video(chat_id, video_to_send, caption="✨ Omni Flash द्वारा एडिट किया गया वीडियो!")
+            
+        # आउटपुट फाइल डिलीट करना
+        if os.path.exists(output_filename):
+            os.remove(output_filename)
 
     except Exception as e:
-        bot.send_message(chat_id, f"❌ प्रोसेसिंग के दौरान त्रुटि आई: {str(e)}")
+        # अगर कोई एरर आता है या मॉडल केवल टेक्स्ट रिस्पांस देता है
+        if 'response' in locals() and hasattr(response, 'text') and response.text:
+            bot.send_message(chat_id, f"🤖 मॉडल का जवाब:\n{response.text}")
+        else:
+            bot.send_message(chat_id, f"❌ प्रोसेसिंग के दौरान त्रुटि आई: {str(e)}")
         
     finally:
-        # --- सर्वर स्पेस मैनेजमेंट (सबसे जरूरी हिस्सा) ---
+        # --- सर्वर स्पेस मैनेजमेंट ---
         # काम खत्म होने के बाद Render सर्वर से ओरिजिनल वीडियो तुरंत डिलीट कर देना
         if os.path.exists(local_video_path):
             os.remove(local_video_path)
         # सेशन क्लियर करना ताकि नया वीडियो भेजा जा सके
         if chat_id in user_sessions:
             del user_sessions[chat_id]
-        # अस्थाई मैसेज डिलीट करना
-        bot.delete_message(chat_id, status_msg.message_id)
+        # अस्थाई स्टेटस मैसेज डिलीट करना
+        try:
+            bot.delete_message(chat_id, status_msg.message_id)
+        except:
+            pass
 
 # बॉट को चालू करना
 print("बॉट सफलता पूर्वक चालू हो गया है...")
