@@ -1,7 +1,0 @@
-pyTelegramBotAPI
-requests
-beautifulsoup4
-flask
-gunicorn
-pymongo
-dnspython
