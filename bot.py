@@ -110,8 +110,14 @@ def handle_prompt(message):
             
             output_filename = f"edited_{chat_id}.mp4"
             
-            # --- नया सही सिंटैक्स: वीडियो बाइट्स डाउनलोड करके फाइल में राइट करना ---
-            video_bytes = client.files.download(name=video_file_obj.name)
+            # --- यहाँ सुधारा गया लॉजिक (URI से फाइल का नाम निकालना) ---
+            if hasattr(video_file_obj, 'uri') and video_file_obj.uri:
+                file_resource_name = video_file_obj.uri.split('/')[-1]
+            else:
+                file_resource_name = getattr(video_file_obj, 'name', str(video_file_obj))
+                
+            # सही नाम का उपयोग करके वीडियो डाउनलोड करना
+            video_bytes = client.files.download(name=file_resource_name)
             with open(output_filename, "wb") as f:
                 f.write(video_bytes)
                 
