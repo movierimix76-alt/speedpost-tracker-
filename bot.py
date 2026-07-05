@@ -88,18 +88,16 @@ def handle_prompt(message):
             raise ValueError("गूगल सर्वर पर इनपुट वीडियो प्रोसेस नहीं हो पाया।")
             
         # 3. Veo वीडियो जनरेशन मॉडल का उपयोग करना
-        # वीडियो एडिटिंग/ट्रांसफ़ॉर्मेशन के लिए हम इनपुट वीडियो और प्रॉम्ट दोनों Veo को भेज रहे हैं
         operation = client.models.generate_videos(
             model='veo-3.1-fast-generate-preview',
             prompt=prompt_text,
             config=types.GenerateVideosConfig(
-                # आप चाहें तो यहाँ ड्यूरेशन (4, 6 या 8) या अस्पेक्ट रेशियो बदल सकते हैं
                 duration_seconds=4,
                 aspect_ratio="16:9"
             )
         )
         
-        # 4. वीडियो जनरेट होने की असिंक्रोनस प्रोसेस का इंतजार करना (Polling)
+        # 4. वीडियो जनरेट होने की प्रोसेस का इंतजार करना (Polling)
         print("Veo वीडियो जनरेशन शुरू हो गया है, इंतजार कर रहे हैं...")
         while not operation.done:
             time.sleep(10)
@@ -112,8 +110,10 @@ def handle_prompt(message):
             
             output_filename = f"edited_{chat_id}.mp4"
             
-            # वीडियो बाइट्स डाउनलोड करके लोकल सर्वर पर सेव करना
-            client.files.download(file=video_file_obj, path=output_filename)
+            # --- नया सही सिंटैक्स: वीडियो बाइट्स डाउनलोड करके फाइल में राइट करना ---
+            video_bytes = client.files.download(name=video_file_obj.name)
+            with open(output_filename, "wb") as f:
+                f.write(video_bytes)
                 
             # यूजर को एडिटेड वीडियो वापस भेजना
             with open(output_filename, 'rb') as video_to_send:
