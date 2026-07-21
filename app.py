@@ -1,19 +1,11 @@
 """
-Telegram AWB Matcher — Render FREE Web Service Version
+Telegram AWB Matcher — Render FREE Web Service Version (v2)
 =========================================================
-Render के free plan पर चलाने के लिए। यह एक छोटा Flask वेब सर्वर चलाता है
-(ताकि Render की "port bind" शर्त पूरी हो — free plan सिर्फ Web Service
-टाइप ही मुफ्त देता है), और साथ ही Telegram बॉट को background thread में
-चलाता है।
-
-ज़रूरी बात: free plan पर persistent disk नहीं मिलती, इसलिए हर restart/deploy
-पर Excel फाइल रीसेट हो सकती है (खाली या repo वाली base फाइल से दोबारा शुरू)।
-इसलिए यहां एक /download रूट भी है जहां से आप कभी भी लेटेस्ट Excel डाउनलोड
-कर सकते हैं — उसे अपने फोन/कंप्यूटर में बैकअप रखते रहें।
-
-Sleep से बचने के लिए: Render का free web service 15 मिनट बिना ट्रैफिक के
-सो जाता है। इसे जगाए रखने के लिए UptimeRobot (मुफ्त) से हर 5 मिनट पर
-इसके URL को ping करवाना होगा — देखें SETUP_INSTRUCTIONS_RENDER_FREE.md
+बदलाव (v2):
+1) चैनल की entity पहले से sync की जाती है (get_dialogs) ताकि
+   "Cannot find any entity corresponding to..." वाली गलती न आए
+2) /upload पेज जोड़ा गया — यहां से अपनी असली AWB Excel फाइल browser से
+   सीधे अपलोड कर सकते हैं, वही आगे मास्टर फाइल के तौर पर इस्तेमाल होगी
 """
 
 import os
@@ -22,7 +14,7 @@ import asyncio
 import logging
 import threading
 from openpyxl import load_workbook, Workbook
-from flask import Flask, send_file
+from flask import Flask, send_file, request
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -31,7 +23,7 @@ API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 GROUP = os.environ["GROUP"]
-EXCEL_FILE = os.environ.get("EXCEL_FILE", "awb.xlsx")   # free plan पर local disk (ephemeral)
+EXCEL_FILE = os.environ.get("EXCEL_FILE", "awb.xlsx")
 SHEET_NAME = os.environ.get("SHEET_NAME") or None
 FOUND_TEXT = os.environ.get("FOUND_TEXT", "मिल गया")
 OLD_MESSAGES_LIMIT = int(os.environ.get("OLD_MESSAGES_LIMIT", "100000"))
@@ -43,13 +35,16 @@ AWB_PATTERN = re.compile(r"\b[A-Z]{2}\d{9}IN\b")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 log = logging.getLogger(__name__)
 
-# ---------------------------- Flask (सिर्फ port bind + status/download के लिए) ----------------------------
 app = Flask(__name__)
 
 
 @app.route("/")
 def health():
-    return "AWB बॉट चल रहा है ✅"
+    return """
+    <h2>AWB बॉट चल रहा है ✅</h2>
+    <p><a href="/upload">यहां से अपनी असली AWB Excel फाइल अपलोड करें</a></p>
+    <p><a href="/download">लेटेस्ट Excel फाइल डाउनलोड करें</a></p>
+    """
 
 
 @app.route("/download")
@@ -57,6 +52,24 @@ def download():
     if not os.path.exists(EXCEL_FILE):
         return "अभी तक कोई फाइल नहीं बनी।", 404
     return send_file(EXCEL_FILE, as_attachment=True)
+
+
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    if request.method == "POST":
+        f = request.files.get("file")
+        if not f or not f.filename.endswith(".xlsx"):
+            return "कृपया .xlsx फाइल चुनें। <a href='/upload'>वापस जाएं</a>"
+        f.save(EXCEL_FILE)
+        return "फाइल अपलोड हो गई ✅ <a href='/'>होम पर जाएं</a>"
+    return """
+    <h3>अपनी AWB Excel फाइल अपलोड करें</h3>
+    <p>ध्यान रखें: column A में AWB नंबर होने चाहिए (header row 1 में)</p>
+    <form method="post" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".xlsx">
+      <button type="submit">अपलोड करें</button>
+    </form>
+    """
 
 
 # ---------------------------- Telegram लॉजिक ----------------------------
@@ -93,11 +106,31 @@ def mark_found_in_excel(awb_set):
     return matched
 
 
-async def scan_old_messages():
+async def get_target_entity():
+    """चैनल/ग्रुप की entity को पहले dialogs sync करके ढूंढता है ताकि
+    'Cannot find any entity' वाली गलती न आए।"""
+    try:
+        return await client.get_entity(GROUP)
+    except Exception:
+        log.info("सीधे entity नहीं मिली, dialogs sync किए जा रहे हैं...")
+        async for dialog in client.iter_dialogs():
+            entity = dialog.entity
+            if (
+                str(getattr(entity, "username", "")) == str(GROUP).lstrip("@")
+                or str(entity.id) == str(GROUP)
+                or f"-100{entity.id}" == str(GROUP)
+            ):
+                return entity
+        raise ValueError(
+            f"चैनल/ग्रुप '{GROUP}' नहीं मिला — पक्का करें कि आपका अकाउंट उसमें join है।"
+        )
+
+
+async def scan_old_messages(target):
     log.info(f"पुराने {OLD_MESSAGES_LIMIT} मैसेज पढ़े जा रहे हैं...")
     all_awbs = set()
     count = 0
-    async for msg in client.iter_messages(GROUP, limit=OLD_MESSAGES_LIMIT):
+    async for msg in client.iter_messages(target, limit=OLD_MESSAGES_LIMIT):
         count += 1
         if msg.text:
             all_awbs.update(AWB_PATTERN.findall(msg.text))
@@ -109,31 +142,29 @@ async def scan_old_messages():
     log.info(f"पुराने मैसेज से {len(matched)} AWB मार्क हुए।")
 
 
-@client.on(events.NewMessage())
-async def on_new_message(event):
-    chat = await event.get_chat()
-    chat_ok = (
-        str(getattr(chat, "username", "")) == GROUP.lstrip("@")
-        or str(getattr(chat, "id", "")) == GROUP
-        or f"-100{getattr(chat, 'id', '')}" == GROUP
-    )
-    if not chat_ok:
-        return
-
-    text = event.raw_text or ""
-    found = set(AWB_PATTERN.findall(text))
-    if not found:
-        return
-    matched = mark_found_in_excel(found)
-    if matched:
-        log.info(f"नया मैसेज — मार्क हुआ: {matched}")
+def register_new_message_handler(target_id):
+    @client.on(events.NewMessage(chats=target_id))
+    async def on_new_message(event):
+        text = event.raw_text or ""
+        found = set(AWB_PATTERN.findall(text))
+        if not found:
+            return
+        matched = mark_found_in_excel(found)
+        if matched:
+            log.info(f"नया मैसेज — मार्क हुआ: {matched}")
 
 
 async def telegram_main():
     ensure_excel_exists()
     await client.start()
     log.info("Telegram से कनेक्ट हो गया।")
-    await scan_old_messages()
+
+    target = await get_target_entity()
+    log.info(f"टारगेट चैनल/ग्रुप मिल गया: {getattr(target, 'title', target.id)}")
+
+    register_new_message_handler(target.id)
+    await scan_old_messages(target)
+
     log.info("अब नए मैसेज लाइव सुने जा रहे हैं...")
     await client.run_until_disconnected()
 
@@ -141,7 +172,10 @@ async def telegram_main():
 def run_telegram_in_thread():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_main())
+    try:
+        loop.run_until_complete(telegram_main())
+    except Exception as e:
+        log.error(f"Telegram thread में गलती: {e}")
 
 
 if __name__ == "__main__":
