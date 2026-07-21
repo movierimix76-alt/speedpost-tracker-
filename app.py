@@ -1,11 +1,10 @@
 """
-Telegram AWB Matcher — Render FREE Web Service Version (v2)
+Telegram AWB Matcher — Render FREE Web Service Version (v3)
 =========================================================
-बदलाव (v2):
-1) चैनल की entity पहले से sync की जाती है (get_dialogs) ताकि
-   "Cannot find any entity corresponding to..." वाली गलती न आए
-2) /upload पेज जोड़ा गया — यहां से अपनी असली AWB Excel फाइल browser से
-   सीधे अपलोड कर सकते हैं, वही आगे मास्टर फाइल के तौर पर इस्तेमाल होगी
+बदलाव (v3):
+- अब जब भी /upload से नई Excel फाइल अपलोड होगी, बॉट अपने-आप पुराने
+  सभी मैसेज (OLD_MESSAGES_LIMIT तक) दोबारा स्कैन करके नई फाइल से
+  मिलान (rescan) कर देगा — पहले सिर्फ शुरुआत में एक बार स्कैन होता था
 """
 
 import os
@@ -37,6 +36,12 @@ log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Telegram thread का event loop और target entity यहां स्टोर होंगे
+# ताकि Flask (अलग thread) से भी rescan trigger किया जा सके
+telegram_loop = None
+telegram_target = None
+telegram_ready = threading.Event()
+
 
 @app.route("/")
 def health():
@@ -61,7 +66,19 @@ def upload():
         if not f or not f.filename.endswith(".xlsx"):
             return "कृपया .xlsx फाइल चुनें। <a href='/upload'>वापस जाएं</a>"
         f.save(EXCEL_FILE)
-        return "फाइल अपलोड हो गई ✅ <a href='/'>होम पर जाएं</a>"
+        log.info("नई Excel फाइल अपलोड हुई, rescan शुरू किया जा रहा है...")
+
+        if telegram_ready.is_set() and telegram_loop and telegram_target:
+            asyncio.run_coroutine_threadsafe(
+                scan_old_messages(telegram_target), telegram_loop
+            )
+            return (
+                "फाइल अपलोड हो गई ✅ पुराने मैसेज दोबारा स्कैन हो रहे हैं "
+                "(कुछ मिनट लग सकते हैं, नीचे दिए डाउनलोड लिंक से थोड़ी देर बाद देखें)। "
+                "<a href='/'>होम पर जाएं</a>"
+            )
+        return "फाइल अपलोड हो गई, लेकिन बॉट अभी तैयार नहीं है, थोड़ी देर बाद फिर कोशिश करें। <a href='/'>होम पर जाएं</a>"
+
     return """
     <h3>अपनी AWB Excel फाइल अपलोड करें</h3>
     <p>ध्यान रखें: column A में AWB नंबर होने चाहिए (header row 1 में)</p>
@@ -107,8 +124,6 @@ def mark_found_in_excel(awb_set):
 
 
 async def get_target_entity():
-    """चैनल/ग्रुप की entity को पहले dialogs sync करके ढूंढता है ताकि
-    'Cannot find any entity' वाली गलती न आए।"""
     try:
         return await client.get_entity(GROUP)
     except Exception:
@@ -139,7 +154,7 @@ async def scan_old_messages(target):
 
     log.info(f"कुल {count} मैसेज पढ़े, {len(all_awbs)} अलग-अलग AWB मिले। मिलान किया जा रहा है...")
     matched = mark_found_in_excel(all_awbs)
-    log.info(f"पुराने मैसेज से {len(matched)} AWB मार्क हुए।")
+    log.info(f"स्कैन पूरा — {len(matched)} AWB मार्क हुए।")
 
 
 def register_new_message_handler(target_id):
@@ -155,14 +170,19 @@ def register_new_message_handler(target_id):
 
 
 async def telegram_main():
+    global telegram_loop, telegram_target
     ensure_excel_exists()
     await client.start()
     log.info("Telegram से कनेक्ट हो गया।")
 
     target = await get_target_entity()
+    telegram_target = target
+    telegram_loop = asyncio.get_event_loop()
     log.info(f"टारगेट चैनल/ग्रुप मिल गया: {getattr(target, 'title', target.id)}")
 
     register_new_message_handler(target.id)
+    telegram_ready.set()
+
     await scan_old_messages(target)
 
     log.info("अब नए मैसेज लाइव सुने जा रहे हैं...")
