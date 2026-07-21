@@ -1,3 +1,2 @@
-pyTelegramBotAPI
-google-genai
-flask
+telethon
+openpyxl

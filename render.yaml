@@ -1,0 +1,24 @@
+services:
+  - type: worker
+    name: awb-telegram-bot
+    env: python
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python telegram_awb_telethon_render.py"
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: SESSION_STRING
+        sync: false
+      - key: GROUP
+        sync: false
+      - key: EXCEL_FILE
+        value: /data/awb.xlsx
+      - key: OLD_MESSAGES_LIMIT
+        value: "100000"
+    disk:
+      name: awb-data
+      mountPath: /data
+      sizeGB: 1
