@@ -99,14 +99,19 @@ def upload():
 
         wb = load_workbook(f, data_only=True)
         ws = wb.active
+
+        # नई शीट अपलोड होते ही पुराना पूरा डेटा साफ कर दिया जाता है,
+        # ताकि पुरानी और नई शीट के AWB आपस में मिक्स न हों — हर बार
+        # सिर्फ ताज़ा अपलोड की गई शीट का डेटा रहेगा।
+        awbs_col.delete_many({})
+        log.info("पुराना डेटा साफ किया गया, नई शीट डाली जा रही है...")
+
         added = 0
         for row in ws.iter_rows(min_row=2, values_only=True):
             val = row[0]
             if val is None or str(val).strip() == "":
                 continue
             awb = str(val).strip().upper()
-            # पहले से मौजूद हो तो छेड़ें नहीं (ताकि उसकी 'मिल गया' स्थिति न मिटे),
-            # नई हो तो status=None के साथ जोड़ दें
             awbs_col.update_one(
                 {"awb": awb},
                 {"$setOnInsert": {"awb": awb, "status": None,
@@ -114,7 +119,7 @@ def upload():
                 upsert=True,
             )
             added += 1
-        log.info(f"Excel अपलोड — {added} AWB MongoDB में डाले/चेक किए गए। Rescan शुरू हो रहा है...")
+        log.info(f"नई Excel अपलोड — {added} AWB MongoDB में डाले गए। Rescan शुरू हो रहा है...")
 
         if telegram_ready.is_set() and telegram_loop and telegram_target:
             asyncio.run_coroutine_threadsafe(
