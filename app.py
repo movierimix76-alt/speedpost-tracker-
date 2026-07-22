@@ -1,52 +1,71 @@
 """
-Telegram AWB Matcher — Render FREE Web Service Version (v3)
+Telegram AWB Matcher — MongoDB Persistent Version (v5)
 =========================================================
-बदलाव (v3):
-- अब जब भी /upload से नई Excel फाइल अपलोड होगी, बॉट अपने-आप पुराने
-  सभी मैसेज (OLD_MESSAGES_LIMIT तक) दोबारा स्कैन करके नई फाइल से
-  मिलान (rescan) कर देगा — पहले सिर्फ शुरुआत में एक बार स्कैन होता था
+बदलाव (v5):
+- अब डेटा local Excel फाइल की जगह MongoDB में सेव होता है — इसलिए
+  Render restart/redeploy होने पर भी डेटा नहीं खोता।
+- Excel अभी भी /upload से अपलोड कर सकते हैं (उसमें से AWB नंबर
+  पढ़कर MongoDB में डाले जाते हैं), और /download से हमेशा ताज़ा
+  Excel फाइल MongoDB के डेटा से बनाकर डाउनलोड कर सकते हैं।
 """
 
 import os
 import re
+import io
 import asyncio
 import logging
 import threading
+from datetime import datetime, timezone
 from openpyxl import load_workbook, Workbook
 from flask import Flask, send_file, request
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 # ========================= Environment Variables से CONFIG =========================
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 GROUP = os.environ["GROUP"]
-EXCEL_FILE = os.environ.get("EXCEL_FILE", "awb.xlsx")
-SHEET_NAME = os.environ.get("SHEET_NAME") or None
+MONGODB_URI = os.environ["MONGODB_URI"]
+DB_NAME = os.environ.get("DB_NAME", "awb_tracker")
+COLLECTION_NAME = os.environ.get("COLLECTION_NAME", "awbs")
 FOUND_TEXT = os.environ.get("FOUND_TEXT", "मिल गया")
 OLD_MESSAGES_LIMIT = int(os.environ.get("OLD_MESSAGES_LIMIT", "100000"))
 PORT = int(os.environ.get("PORT", "10000"))
 # =====================================================================================
 
-AWB_PATTERN = re.compile(r"\b[A-Z]{2}\d{9}IN\b")
+AWB_PATTERN = re.compile(r"\b[A-Za-z]{2}\d{9}[Ii][Nn]\b")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 log = logging.getLogger(__name__)
 
+# ---------------------------- MongoDB ----------------------------
+mongo_client = MongoClient(MONGODB_URI)
+db = mongo_client[DB_NAME]
+awbs_col = db[COLLECTION_NAME]
+awbs_col.create_index("awb", unique=True)
+
 app = Flask(__name__)
 
-# Telegram thread का event loop और target entity यहां स्टोर होंगे
-# ताकि Flask (अलग thread) से भी rescan trigger किया जा सके
 telegram_loop = None
 telegram_target = None
 telegram_ready = threading.Event()
 
 
+def extract_awbs(text: str):
+    return {m.upper() for m in AWB_PATTERN.findall(text or "")}
+
+
+# ---------------------------- Web रूट्स ----------------------------
 @app.route("/")
 def health():
-    return """
+    total = awbs_col.count_documents({})
+    found = awbs_col.count_documents({"status": FOUND_TEXT})
+    return f"""
     <h2>AWB बॉट चल रहा है ✅</h2>
+    <p>कुल AWB: {total} | मिल गया: {found}</p>
     <p><a href="/upload">यहां से अपनी असली AWB Excel फाइल अपलोड करें</a></p>
     <p><a href="/download">लेटेस्ट Excel फाइल डाउनलोड करें</a></p>
     """
@@ -54,9 +73,21 @@ def health():
 
 @app.route("/download")
 def download():
-    if not os.path.exists(EXCEL_FILE):
-        return "अभी तक कोई फाइल नहीं बनी।", 404
-    return send_file(EXCEL_FILE, as_attachment=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["AWB", "Status"])
+    for doc in awbs_col.find({}, {"_id": 0, "awb": 1, "status": 1}).sort("awb", 1):
+        ws.append([doc["awb"], doc.get("status") or ""])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name="awb.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.route("/upload", methods=["GET", "POST"])
@@ -65,19 +96,35 @@ def upload():
         f = request.files.get("file")
         if not f or not f.filename.endswith(".xlsx"):
             return "कृपया .xlsx फाइल चुनें। <a href='/upload'>वापस जाएं</a>"
-        f.save(EXCEL_FILE)
-        log.info("नई Excel फाइल अपलोड हुई, rescan शुरू किया जा रहा है...")
+
+        wb = load_workbook(f, data_only=True)
+        ws = wb.active
+        added = 0
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            val = row[0]
+            if val is None or str(val).strip() == "":
+                continue
+            awb = str(val).strip().upper()
+            # पहले से मौजूद हो तो छेड़ें नहीं (ताकि उसकी 'मिल गया' स्थिति न मिटे),
+            # नई हो तो status=None के साथ जोड़ दें
+            awbs_col.update_one(
+                {"awb": awb},
+                {"$setOnInsert": {"awb": awb, "status": None,
+                                   "created_at": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
+            added += 1
+        log.info(f"Excel अपलोड — {added} AWB MongoDB में डाले/चेक किए गए। Rescan शुरू हो रहा है...")
 
         if telegram_ready.is_set() and telegram_loop and telegram_target:
             asyncio.run_coroutine_threadsafe(
                 scan_old_messages(telegram_target), telegram_loop
             )
             return (
-                "फाइल अपलोड हो गई ✅ पुराने मैसेज दोबारा स्कैन हो रहे हैं "
-                "(कुछ मिनट लग सकते हैं, नीचे दिए डाउनलोड लिंक से थोड़ी देर बाद देखें)। "
+                f"फाइल अपलोड हो गई ✅ ({added} AWB डाले गए) — पुराने मैसेज दोबारा स्कैन हो रहे हैं। "
                 "<a href='/'>होम पर जाएं</a>"
             )
-        return "फाइल अपलोड हो गई, लेकिन बॉट अभी तैयार नहीं है, थोड़ी देर बाद फिर कोशिश करें। <a href='/'>होम पर जाएं</a>"
+        return f"फाइल अपलोड हो गई ({added} AWB), लेकिन बॉट अभी तैयार नहीं है। <a href='/'>होम पर जाएं</a>"
 
     return """
     <h3>अपनी AWB Excel फाइल अपलोड करें</h3>
@@ -89,38 +136,22 @@ def upload():
     """
 
 
+# ---------------------------- MongoDB हेल्पर ----------------------------
+def mark_found(awb_set):
+    """awb_set में मौजूद AWB को MongoDB में ढूंढकर status='मिल गया' सेट करता है।
+    सिर्फ वही AWB मार्क होंगे जो पहले से collection में मौजूद हैं (यानी आपकी
+    अपलोड की शीट में थे)। लौटाता है कि कितने नए मार्क हुए।"""
+    if not awb_set:
+        return 0
+    result = awbs_col.update_many(
+        {"awb": {"$in": list(awb_set)}, "status": {"$ne": FOUND_TEXT}},
+        {"$set": {"status": FOUND_TEXT, "found_at": datetime.now(timezone.utc)}},
+    )
+    return result.modified_count
+
+
 # ---------------------------- Telegram लॉजिक ----------------------------
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-
-
-def ensure_excel_exists():
-    if not os.path.exists(EXCEL_FILE):
-        log.info("Excel फाइल नहीं मिली, नई खाली फाइल बनाई जा रही है...")
-        wb = Workbook()
-        ws = wb.active
-        ws.append(["AWB", "Status"])
-        wb.save(EXCEL_FILE)
-
-
-def mark_found_in_excel(awb_set):
-    if not awb_set:
-        return []
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb[SHEET_NAME] if SHEET_NAME else wb.active
-
-    matched = []
-    for row in ws.iter_rows(min_row=2):
-        cell_a, cell_b = row[0], row[1]
-        if cell_a.value is None:
-            continue
-        val = str(cell_a.value).strip()
-        if val in awb_set and (cell_b.value or "").strip() != FOUND_TEXT:
-            cell_b.value = FOUND_TEXT
-            matched.append(val)
-
-    if matched:
-        wb.save(EXCEL_FILE)
-    return matched
 
 
 async def get_target_entity():
@@ -148,30 +179,28 @@ async def scan_old_messages(target):
     async for msg in client.iter_messages(target, limit=OLD_MESSAGES_LIMIT):
         count += 1
         if msg.text:
-            all_awbs.update(AWB_PATTERN.findall(msg.text))
+            all_awbs.update(extract_awbs(msg.text))
         if count % 5000 == 0:
             log.info(f"...{count} मैसेज पढ़ लिए, अब तक {len(all_awbs)} अलग AWB मिले")
 
-    log.info(f"कुल {count} मैसेज पढ़े, {len(all_awbs)} अलग-अलग AWB मिले। मिलान किया जा रहा है...")
-    matched = mark_found_in_excel(all_awbs)
-    log.info(f"स्कैन पूरा — {len(matched)} AWB मार्क हुए।")
+    log.info(f"कुल {count} मैसेज पढ़े, {len(all_awbs)} अलग-अलग AWB मिले। MongoDB में मिलान किया जा रहा है...")
+    matched = mark_found(all_awbs)
+    log.info(f"स्कैन पूरा — {matched} नए AWB मार्क हुए।")
 
 
 def register_new_message_handler(target_id):
     @client.on(events.NewMessage(chats=target_id))
     async def on_new_message(event):
-        text = event.raw_text or ""
-        found = set(AWB_PATTERN.findall(text))
+        found = extract_awbs(event.raw_text)
         if not found:
             return
-        matched = mark_found_in_excel(found)
+        matched = mark_found(found)
         if matched:
-            log.info(f"नया मैसेज — मार्क हुआ: {matched}")
+            log.info(f"नया मैसेज — {matched} AWB मार्क हुए।")
 
 
 async def telegram_main():
     global telegram_loop, telegram_target
-    ensure_excel_exists()
     await client.start()
     log.info("Telegram से कनेक्ट हो गया।")
 
@@ -199,6 +228,12 @@ def run_telegram_in_thread():
 
 
 if __name__ == "__main__":
+    try:
+        mongo_client.admin.command("ping")
+        log.info("MongoDB से कनेक्ट हो गया।")
+    except PyMongoError as e:
+        log.error(f"MongoDB कनेक्ट नहीं हो पाया: {e}")
+
     t = threading.Thread(target=run_telegram_in_thread, daemon=True)
     t.start()
     app.run(host="0.0.0.0", port=PORT)
